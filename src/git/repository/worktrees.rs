@@ -606,44 +606,57 @@ impl Repository {
         if let Some(path) = self.path_selector_directory(token) {
             return Ok(ResolvedWorktree::NoWorktreeAtPath { path });
         }
+        // Last in the ladder: a real branch or path always wins, so a short
+        // code only gives a meaning to a token that would otherwise name
+        // nothing.
         if !self.branch(token).exists_locally()?
-            && let Some((path, branch)) = self.worktree_for_short_code(token)?
+            && let Some(branch) = self
+                .short_codes()?
+                .into_iter()
+                .find_map(|(branch, code)| (code == token).then_some(branch))
+            && let Some(path) = self.worktree_for_branch(&branch)?
         {
             return Ok(ResolvedWorktree::worktree(path, Some(branch)));
         }
         Ok(ResolvedWorktree::branch_only(token.to_string()))
     }
 
-    /// The worktree whose branch hashes to `code` under the `hash` template
-    /// filter, so a `{{ branch | hash }}` column in `wt list` names a worktree
-    /// `wt switch` accepts.
+    /// Short codes for every branch with a worktree, when `[list]
+    /// short-codes` is on; empty otherwise.
     ///
-    /// Last in the ladder: a real branch or path always wins, so only a token
-    /// that would otherwise name nothing gains a meaning. Two worktrees sharing
-    /// a code is an error rather than a guess, since `wt remove` resolves here
-    /// too.
-    fn worktree_for_short_code(&self, code: &str) -> anyhow::Result<Option<(PathBuf, String)>> {
-        if code.len() != 3
-            || !code
-                .bytes()
-                .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase())
-        {
-            return Ok(None);
+    /// A code is assigned the first time a worktree is seen and stored in git
+    /// config as `worktrunk.state.<branch>.code`, so it never changes while
+    /// its worktree exists: a newcomer that wants a taken code moves down the
+    /// ladder in [`assign_short_codes`] instead. `wt list` (which displays
+    /// them) and worktree resolution (which accepts them) both read this one
+    /// map, so the code shown is the code that resolves.
+    pub fn short_codes(&self) -> anyhow::Result<Vec<(String, String)>> {
+        if !self.config().list.short_codes() {
+            return Ok(Vec::new());
         }
-        let mut matches = self.list_worktrees()?.iter().filter_map(|wt| {
-            let branch = wt.branch.as_ref()?;
-            (crate::config::short_hash(branch) == code).then(|| (wt.path.clone(), branch.clone()))
-        });
-        let Some(first) = matches.next() else {
-            return Ok(None);
-        };
-        if let Some((_, other)) = matches.next() {
-            anyhow::bail!(
-                "Short code {code} matches both {} and {other}; use the branch name",
-                first.1
-            );
+        let default_branch = self.default_branch();
+        let stored: Vec<(String, Option<String>)> = self
+            .list_worktrees()?
+            .iter()
+            .filter_map(|wt| wt.branch.clone())
+            .map(|branch| {
+                let code = self.config_value(&short_code_key(&branch))?;
+                Ok((branch, code))
+            })
+            .collect::<anyhow::Result<_>>()?;
+        let assigned = assign_short_codes(&stored, default_branch.as_deref());
+        for (branch, code) in &assigned {
+            let unchanged = stored
+                .iter()
+                .any(|(b, c)| b == branch && c.as_deref() == Some(code.as_str()));
+            // A failed write (read-only repo, config lock) leaves this code
+            // unstored, so it may be reassigned next time; not worth failing
+            // the command over.
+            if !unchanged && let Err(e) = self.set_config(&short_code_key(branch), code) {
+                log::debug!("Failed to store short code for {branch}: {e:#}");
+            }
         }
-        Ok(Some(first))
+        Ok(assigned)
     }
 
     /// The branch a selector names, erroring only when it names a detached
@@ -913,6 +926,85 @@ fn holds_git_data(path: &Path) -> bool {
     is_bare_repo_dir(path)
 }
 
+fn short_code_key(branch: &str) -> String {
+    format!("worktrunk.state.{branch}.code")
+}
+
+/// Give every branch a unique short code, keeping the codes already stored.
+///
+/// `stored` pairs each branch that has a worktree with its stored code, if
+/// any. A stored code survives unless an earlier branch (default branch
+/// first, then by name) holds the same one — two branches can end up there
+/// only when one regained a worktree after another claimed its code. Every
+/// other branch takes the first free candidate from [`short_code_candidates`].
+pub(crate) fn assign_short_codes(
+    stored: &[(String, Option<String>)],
+    default_branch: Option<&str>,
+) -> Vec<(String, String)> {
+    let mut ordered: Vec<&(String, Option<String>)> = stored.iter().collect();
+    ordered.sort_by_key(|(branch, _)| (Some(branch.as_str()) != default_branch, branch.as_str()));
+
+    let mut taken = HashSet::new();
+    let mut assigned = Vec::with_capacity(ordered.len());
+    let mut pending = Vec::new();
+    for (branch, code) in ordered {
+        match code {
+            Some(code) if taken.insert(code.clone()) => {
+                assigned.push((branch.clone(), code.clone()))
+            }
+            _ => pending.push(branch),
+        }
+    }
+    for branch in pending {
+        let code = short_code_candidates(branch)
+            .find(|code| !taken.contains(code))
+            .expect("candidates are unbounded");
+        taken.insert(code.clone());
+        assigned.push((branch.clone(), code));
+    }
+    assigned
+}
+
+/// Short codes for `branch`, shortest and most guessable first.
+///
+/// From the initials of the words in the name (split on `/ - _ .`): first and
+/// last initial (`chore/use-oauthlite` → `co`), or for a one-word name its
+/// first letter and next consonant (`main` → `mn`); then the first initial
+/// with a digit (`c1`); then all initials (`cuo`); then the first initial with
+/// ever larger numbers, so a code is always found.
+fn short_code_candidates(branch: &str) -> impl Iterator<Item = String> {
+    let words: Vec<Vec<char>> = branch
+        .split(['/', '-', '_', '.'])
+        .map(|word| {
+            word.chars()
+                .filter(char::is_ascii_alphanumeric)
+                .map(|c| c.to_ascii_lowercase())
+                .collect::<Vec<_>>()
+        })
+        .filter(|word| !word.is_empty())
+        .collect();
+    let initials: String = words.iter().map(|word| word[0]).collect();
+    let first = initials.chars().next().unwrap_or('w');
+    let second = match words.as_slice() {
+        [] => None,
+        [word] => word[1..]
+            .iter()
+            .find(|c| !"aeiou".contains(**c))
+            .or(word.get(1))
+            .copied(),
+        [.., last] => Some(last[0]),
+    };
+
+    let pair = second.map(|second| format!("{first}{second}"));
+    let digits = (1..=9).map(move |n| format!("{first}{n}"));
+    let all_initials = (initials.len() >= 3).then_some(initials);
+    let numbered = (10..).map(move |n| format!("{first}{n}"));
+    pair.into_iter()
+        .chain(digits)
+        .chain(all_initials)
+        .chain(numbered)
+}
+
 /// Paths of every worktree checked out on `branch`, in git's listing order.
 ///
 /// At most one under normal use; more than one only when the user ran
@@ -987,5 +1079,78 @@ fn warn_duplicate_checkout(branch: &str, paths: &[PathBuf]) {
                 hint_message(cformat!("To drop a duplicate, run <underline>{cmd}</>"))
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod short_code_tests {
+    use super::assign_short_codes;
+
+    fn assign(stored: &[(&str, Option<&str>)]) -> Vec<(String, String)> {
+        let stored: Vec<_> = stored
+            .iter()
+            .map(|(b, c)| (b.to_string(), c.map(str::to_string)))
+            .collect();
+        let mut codes = assign_short_codes(&stored, Some("main"));
+        codes.sort();
+        codes
+    }
+
+    fn pairs(expected: &[(&str, &str)]) -> Vec<(String, String)> {
+        let mut pairs: Vec<_> = expected
+            .iter()
+            .map(|(b, c)| (b.to_string(), c.to_string()))
+            .collect();
+        pairs.sort();
+        pairs
+    }
+
+    #[test]
+    fn codes_come_from_initials() {
+        assert_eq!(
+            assign(&[
+                ("main", None),
+                ("chore/use-oauthlite", None),
+                ("feat/whats-new", None),
+            ]),
+            pairs(&[
+                ("main", "mn"),
+                ("chore/use-oauthlite", "co"),
+                ("feat/whats-new", "fn"),
+            ])
+        );
+    }
+
+    /// A stored code never moves; the newcomer takes the next candidate.
+    #[test]
+    fn existing_codes_stay_put() {
+        assert_eq!(
+            assign(&[("chore/use-oauthlite", Some("co")), ("ci/oops", None)]),
+            pairs(&[("chore/use-oauthlite", "co"), ("ci/oops", "c1")])
+        );
+        // Even when the newcomer sorts first by name.
+        assert_eq!(
+            assign(&[("core/old", Some("co")), ("chore/other", None)]),
+            pairs(&[("core/old", "co"), ("chore/other", "c1")])
+        );
+    }
+
+    /// Two branches stored with one code (a branch regained its worktree
+    /// after another claimed the code): the default branch, then the first by
+    /// name, keeps it.
+    #[test]
+    fn duplicate_stored_codes_are_resolved() {
+        assert_eq!(
+            assign(&[("b/x", Some("bx")), ("a/x", Some("bx"))]),
+            pairs(&[("a/x", "bx"), ("b/x", "b1")])
+        );
+    }
+
+    #[test]
+    fn candidates_never_run_out() {
+        let stored: Vec<_> = (0..40).map(|i| (format!("c/o{i}"), None)).collect();
+        let codes = assign_short_codes(&stored, None);
+        let unique: std::collections::HashSet<_> = codes.iter().map(|(_, c)| c).collect();
+        assert_eq!(unique.len(), 40);
     }
 }

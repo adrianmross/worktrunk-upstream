@@ -205,6 +205,12 @@ pub struct ListConfig {
         skip_serializing_if = "BTreeMap::is_empty"
     )]
     pub custom_columns: BTreeMap<String, ListColumnConfig>,
+
+    /// Give each worktree a short code (`co` for `chore/use-oauthlite`), shown
+    /// before its branch name and accepted wherever a worktree is named, such
+    /// as `wt switch co`. A code never changes once assigned.
+    #[serde(rename = "short-codes", skip_serializing_if = "Option::is_none")]
+    pub short_codes: Option<bool>,
 }
 
 impl ListConfig {
@@ -226,6 +232,11 @@ impl ListConfig {
     /// Enable LLM-generated branch summaries (default: false)
     pub fn summary(&self) -> bool {
         self.summary.unwrap_or(false)
+    }
+
+    /// Short codes for worktrees (default: false)
+    pub fn short_codes(&self) -> bool {
+        self.short_codes.unwrap_or(false)
     }
 
     /// Wall-clock budget for the collect phase (default: None — no budget).
@@ -267,6 +278,7 @@ impl Merge for ListConfig {
             timeout_ms: other.timeout_ms.or(self.timeout_ms),
             columns,
             custom_columns,
+            short_codes: other.short_codes.or(self.short_codes),
         }
     }
 }

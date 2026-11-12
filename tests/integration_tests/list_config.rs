@@ -1509,3 +1509,43 @@ fn test_list_config_columns_cli_override(repo: TestRepo) {
         );
     });
 }
+
+/// `[list] short-codes`: each worktree's code shows before its branch name,
+/// `wt switch <code>` goes there, and a code never moves once assigned.
+#[rstest]
+fn test_list_config_short_codes(mut repo: TestRepo) {
+    repo.add_worktree("feat/whats-new");
+    fs::write(repo.test_config_path(), "[list]\nshort-codes = true\n").unwrap();
+
+    let list = |repo: &TestRepo| {
+        let mut cmd = wt_command();
+        repo.configure_wt_cmd(&mut cmd);
+        let output = cmd
+            .arg("list")
+            .current_dir(repo.root_path())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        ansi_str::AnsiStr::ansi_strip(&*String::from_utf8(output.stdout).unwrap()).into_owned()
+    };
+    let stdout = list(&repo);
+    assert!(stdout.contains("mn main"), "{stdout}");
+    assert!(stdout.contains("fn feat/whats-new"), "{stdout}");
+
+    // A newcomer wanting `fn` adapts; feat/whats-new keeps it.
+    repo.add_worktree("fix/null");
+    let stdout = list(&repo);
+    assert!(stdout.contains("fn feat/whats-new"), "{stdout}");
+    assert!(stdout.contains("f1 fix/null"), "{stdout}");
+
+    let mut cmd = wt_command();
+    repo.configure_wt_cmd(&mut cmd);
+    let output = cmd
+        .args(["switch", "fn", "--no-cd"])
+        .current_dir(repo.root_path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("feat/whats-new"), "{stderr}");
+}

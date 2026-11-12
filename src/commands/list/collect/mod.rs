@@ -1346,6 +1346,20 @@ pub fn collect(
         );
     }
 
+    // Short codes sit in the Branch cell, so they pad here, before layout
+    // measures that column. Statusline-free: it never runs collect.
+    let short_codes = repo.short_codes()?;
+    if let Some(width) = short_codes.iter().map(|(_, code)| code.len()).max() {
+        for item in &mut all_items {
+            let code = item
+                .worktree_data()
+                .and(item.branch())
+                .and_then(|branch| short_codes.iter().find(|(b, _)| b == branch))
+                .map_or("", |(_, code)| code.as_str());
+            item.short_code = format!("{code:<width$} ");
+        }
+    }
+
     // `[list] columns` selects/reorders the columns to render. Names address
     // built-ins or custom columns (by header → resolved index), so the custom
     // names are passed in resolution order. Like custom columns, a bad name

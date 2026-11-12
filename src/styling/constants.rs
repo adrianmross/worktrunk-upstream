@@ -50,6 +50,12 @@ pub const DETACHED: Style = Style::new()
     .fg_color(Some(Color::Ansi(AnsiColor::Yellow)))
     .dimmed();
 
+/// Marks a worktree's short code before its name in a `wt list` Branch cell,
+/// so the code reads as something to type rather than part of the name.
+pub const SHORT_CODE: Style = Style::new()
+    .fg_color(Some(Color::Ansi(AnsiColor::Cyan)))
+    .bold();
+
 /// Gutter style for quoted content (commands, config, error details)
 ///
 /// We wanted the dimmest/most subtle background that works on both dark and light

@@ -329,6 +329,12 @@ pub struct ListItem {
     /// columns are configured.
     pub custom_values: Vec<String>,
 
+    /// This row's `[list] short-codes` code, padded to the widest code so
+    /// branch names stay aligned, plus a separating space. Rendered before
+    /// the name in the Branch cell; empty when short codes are off, and blank
+    /// padding for a row without a worktree.
+    pub short_code: String,
+
     /// Which fact families hold *seeded* conservative defaults rather than
     /// computed results (see `seed_skipped_task_defaults`). The table wants
     /// the conservative values; schema-2 JSON reports the seeded families as
@@ -427,6 +433,7 @@ impl ListItem {
             status_symbols: StatusSymbols::default(),
             statusline: None,
             custom_values: Vec::new(),
+            short_code: String::new(),
             seeded: SeededFacts::default(),
             kind,
         }

@@ -1286,7 +1286,9 @@ pub fn calculate_layout_with_width(
         .max()
         .unwrap_or(0)
         .min(MAX_BRANCH);
-    let max_branch = fit_header(ColumnKind::Branch.header(), max_branch);
+    // Every row carries the same padded short-code prefix (empty when off).
+    let short_code_width = items.first().map_or(0, |item| item.short_code.width());
+    let max_branch = fit_header(ColumnKind::Branch.header(), max_branch + short_code_width);
 
     let path_data_width = items
         .iter()

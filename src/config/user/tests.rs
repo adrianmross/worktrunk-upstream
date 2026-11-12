@@ -283,6 +283,7 @@ fn test_list_config_serde() {
         timeout_ms: None,
         columns: vec!["branch".into(), "ci".into(), "path".into()],
         custom_columns: Default::default(),
+        short_codes: None,
     };
     let json = serde_json::to_string(&config).unwrap();
     let parsed: ListConfig = serde_json::from_str(&json).unwrap();
@@ -661,6 +662,7 @@ fn test_merge_list_config() {
         timeout_ms: Some(2000),
         columns: vec!["branch".into(), "ci".into()],
         custom_columns: Default::default(),
+        short_codes: None,
     };
     let override_config = ListConfig {
         full: None,           // Should fall back to base
@@ -671,6 +673,7 @@ fn test_merge_list_config() {
         timeout_ms: None,    // Should fall back to base
         columns: Vec::new(), // Empty → fall back to base
         custom_columns: Default::default(),
+        short_codes: None,
     };
 
     let merged = base.merge_with(&override_config);
@@ -1047,6 +1050,7 @@ fn test_list_config_accessor_methods_with_values() {
         timeout_ms: Some(3000),
         columns: Vec::new(),
         custom_columns: Default::default(),
+        short_codes: None,
     };
     assert!(config.full());
     assert!(config.branches());

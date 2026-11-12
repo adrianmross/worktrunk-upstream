@@ -1,7 +1,7 @@
 use crate::display::{format_relative_time_short, shorten_path};
 use anstyle::{Effects, Style};
 use unicode_width::UnicodeWidthStr;
-use worktrunk::styling::{DETACHED, StyledLine, truncate_visible};
+use worktrunk::styling::{DETACHED, SHORT_CODE, StyledLine, truncate_visible};
 use worktrunk::utils::escape_controls;
 
 use super::columns::{ColumnKind, DiffVariant};
@@ -314,6 +314,9 @@ impl LayoutConfig {
                     // row's `DETACHED` style, so the cell doesn't restyle as
                     // the row fills in. Empty text goes unstyled for the reason
                     // [`Self::render_text_cell`] gives.
+                    if !item.short_code.is_empty() {
+                        cell.push_styled(item.short_code.clone(), SHORT_CODE);
+                    }
                     if item.branch().is_none() && !branch.is_empty() {
                         cell.push_styled(branch.to_string(), DETACHED);
                     } else {
@@ -525,7 +528,14 @@ impl ColumnLayout {
                 } else {
                     text_style
                 };
-                self.render_text_cell(item.display_name(), style)
+                let name = self.render_text_cell(item.display_name(), style);
+                if item.short_code.is_empty() {
+                    return name;
+                }
+                let mut cell = StyledLine::new();
+                cell.push_styled(item.short_code.clone(), SHORT_CODE);
+                cell.extend(name);
+                cell.truncate_to_width(self.width)
             }
             ColumnKind::Status => {
                 // `render_with_mask` emits the placeholder glyph per
