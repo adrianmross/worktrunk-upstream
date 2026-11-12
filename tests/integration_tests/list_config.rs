@@ -1568,6 +1568,12 @@ fn test_list_config_short_codes_lifecycle(mut repo: TestRepo) {
 
     let json = wt(&repo, &["list", "--format", "json"], repo.root_path());
     assert!(json.contains(r#""short_code": "fn""#), "{json}");
+    let completion = repo.completion_cmd(&["wt", "switch", ""]).output().unwrap();
+    let completion = String::from_utf8_lossy(&completion.stdout);
+    assert!(
+        completion.lines().any(|line| line.starts_with("fn")),
+        "{completion}"
+    );
     let status = wt(&repo, &["list", "statusline"], &path);
     assert!(
         status.trim_start().starts_with("fn feat/whats-new"),

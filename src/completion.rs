@@ -30,7 +30,7 @@
 //! skips prewarm's rev-parse batch (benches/AGENTS.md, "Analyzing a trace").
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
 
@@ -489,11 +489,17 @@ impl ValueCompleter for BranchCompleter {
         // fetched-into clone is the most expensive call on this path.
         let may_offer_remote_only = !self.exclude_remote_only && !self.worktree_only;
 
-        let branches = match Repository::current()
-            .and_then(|repo| repo.branches_for_completion(may_offer_remote_only))
-        {
-            Ok(b) => b,
-            Err(_) => return Vec::new(),
+        let Ok(repo) = Repository::current() else {
+            return Vec::new();
+        };
+        let Ok(branches) = repo.branches_for_completion(may_offer_remote_only) else {
+            return Vec::new();
+        };
+        // Stored short codes only: completion never assigns one.
+        let codes = if repo.config().list.short_codes() {
+            repo.stored_short_codes().unwrap_or_default()
+        } else {
+            HashMap::new()
         };
 
         if branches.is_empty() {
@@ -506,7 +512,8 @@ impl ValueCompleter for BranchCompleter {
         // Threshold of 100 aligns with bash's default `completion-query-items`.
         let exclude_remote_only = !may_offer_remote_only || branches.len() > 100;
 
-        branches
+        let mut code_candidates = Vec::new();
+        let mut candidates: Vec<_> = branches
             .into_iter()
             .filter(|branch| {
                 if self.worktree_only {
@@ -518,6 +525,14 @@ impl ValueCompleter for BranchCompleter {
                 }
             })
             .map(|branch| {
+                if matches!(branch.category, BranchCategory::Worktree)
+                    && let Some(code) = codes.get(&branch.name)
+                {
+                    code_candidates.push(
+                        CompletionCandidate::new(code)
+                            .help(Some(format!("+ {}", branch.name).into())),
+                    );
+                }
                 let time_str = format_relative_time_short(branch.timestamp);
                 let help = match branch.category {
                     BranchCategory::Worktree => format!("+ {}", time_str),
@@ -528,7 +543,9 @@ impl ValueCompleter for BranchCompleter {
                 };
                 CompletionCandidate::new(branch.name).help(Some(help.into()))
             })
-            .collect()
+            .collect();
+        candidates.append(&mut code_candidates);
+        candidates
     }
 }
 
