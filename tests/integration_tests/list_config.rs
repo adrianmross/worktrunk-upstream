@@ -1549,3 +1549,55 @@ fn test_list_config_short_codes(mut repo: TestRepo) {
     assert!(output.status.success(), "{stderr}");
     assert!(stderr.contains("feat/whats-new"), "{stderr}");
 }
+
+/// Short codes reach JSON and the statusline, a newcomer claims the code of a
+/// branch whose worktree is gone, and deleting a branch drops its code.
+#[rstest]
+fn test_list_config_short_codes_lifecycle(mut repo: TestRepo) {
+    let path = repo.add_worktree("feat/whats-new");
+    fs::write(repo.test_config_path(), "[list]\nshort-codes = true\n").unwrap();
+    let wt = |repo: &TestRepo, args: &[&str], dir: &std::path::Path| {
+        let mut cmd = wt_command();
+        repo.configure_wt_cmd(&mut cmd);
+        let output = cmd.args(args).current_dir(dir).output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(output.status.success(), "{args:?}: {stderr}");
+        ansi_str::AnsiStr::ansi_strip(&*String::from_utf8(output.stdout).unwrap()).into_owned()
+    };
+    let config = |repo: &TestRepo| repo.git_output(&["config", "--list"]);
+
+    let json = wt(&repo, &["list", "--format", "json"], repo.root_path());
+    assert!(json.contains(r#""short_code": "fn""#), "{json}");
+    let status = wt(&repo, &["list", "statusline"], &path);
+    assert!(
+        status.trim_start().starts_with("fn feat/whats-new"),
+        "{status}"
+    );
+
+    // feat/whats-new loses its worktree but keeps its branch (and code)…
+    wt(
+        &repo,
+        &[
+            "remove",
+            "feat/whats-new",
+            "--no-delete-branch",
+            "--foreground",
+            "-y",
+        ],
+        repo.root_path(),
+    );
+    assert!(config(&repo).contains("worktrunk.state.feat/whats-new.code=fn"));
+    // …until a newcomer claims `fn`.
+    repo.add_worktree("fix/new");
+    let list = wt(&repo, &["list"], repo.root_path());
+    assert!(list.contains("fn fix/new"), "{list}");
+    assert!(!config(&repo).contains("feat/whats-new.code"));
+
+    // Deleting a branch drops its code.
+    wt(
+        &repo,
+        &["remove", "fix/new", "--foreground", "-y"],
+        repo.root_path(),
+    );
+    assert!(!config(&repo).contains("fix/new.code"), "{}", config(&repo));
+}

@@ -32,6 +32,11 @@ pub struct JsonItem {
     /// Branch name, null for detached HEAD
     pub branch: Option<String>,
 
+    /// Short code (`[list] short-codes`), accepted wherever a worktree is
+    /// named; absent when short codes are off or the row has no worktree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub short_code: Option<String>,
+
     /// Filesystem path to the worktree
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
@@ -405,6 +410,7 @@ impl JsonItem {
 
         JsonItem {
             branch: item.branch().map(str::to_string),
+            short_code: item.code().map(str::to_string),
             path,
             kind: kind_str,
             commit,

@@ -1349,13 +1349,13 @@ pub fn collect(
     // Short codes sit in the Branch cell, so they pad here, before layout
     // measures that column. Statusline-free: it never runs collect.
     let short_codes = repo.short_codes()?;
-    if let Some(width) = short_codes.iter().map(|(_, code)| code.len()).max() {
+    if let Some(width) = short_codes.values().map(String::len).max() {
         for item in &mut all_items {
             let code = item
                 .worktree_data()
                 .and(item.branch())
-                .and_then(|branch| short_codes.iter().find(|(b, _)| b == branch))
-                .map_or("", |(_, code)| code.as_str());
+                .and_then(|branch| short_codes.get(branch))
+                .map_or("", String::as_str);
             item.short_code = format!("{code:<width$} ");
         }
     }

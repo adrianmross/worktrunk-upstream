@@ -1314,7 +1314,7 @@ fn execute_switch(
                         // A new branch starts without the marker of an earlier
                         // branch that had the same name and was deleted
                         // outside `wt`.
-                        repo.clear_branch_marker(&branch);
+                        repo.clear_branch_state(&branch);
                     }
 
                     (

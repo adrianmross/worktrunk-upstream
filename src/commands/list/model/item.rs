@@ -589,6 +589,11 @@ impl ListItem {
     /// and the alternative rendering `wt list` uses when links are unavailable
     /// (the URL in full) would outgrow this line's budget. See
     /// [`format_url_cell`].
+    /// The bare short code (no padding), when this row has one.
+    pub fn code(&self) -> Option<&str> {
+        Some(self.short_code.trim_end()).filter(|code| !code.is_empty())
+    }
+
     pub fn format_statusline_segments(&self) -> Vec<super::statusline_segment::StatuslineSegment> {
         use super::statusline_segment::StatuslineSegment;
 

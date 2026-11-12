@@ -152,6 +152,11 @@ pub struct JsonItemV2 {
     /// the bare branch name, with the remote in `remote`.
     pub branch: Option<String>,
 
+    /// Short code (`[list] short-codes`), accepted wherever a worktree is
+    /// named; absent when short codes are off or the row has no worktree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub short_code: Option<String>,
+
     /// Remote name for remote-only branch rows; absent on local rows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote: Option<String>,
@@ -708,6 +713,7 @@ impl JsonItemV2 {
 
         JsonItemV2 {
             branch,
+            short_code: item.code().map(str::to_string),
             remote,
             head,
             worktree,

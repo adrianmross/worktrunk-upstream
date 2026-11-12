@@ -423,6 +423,8 @@ Item fields:
  ─────── ─────── ────────────────────────────────────────────────────────────── 
  [2mbranch[0m  string/ Branch name; null for a detached-HEAD worktree. Remote rows    
          null    carry the bare name with the remote in [2mremote[0m                  
+ [2mshort_c[0m string  Short code accepted wherever a worktree is named ([2mwt switch fn[0m 
+ [2mode[0m             ); present with [2m[list] short-codes = true[0m on worktree rows     
  [2mremote[0m  string  Remote name, present only on remote-only branch rows           
  [2mhead[0m    object/ HEAD commit (see head object); null for unborn branches        
          null                                                                   

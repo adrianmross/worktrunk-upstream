@@ -1,6 +1,6 @@
 //! Worktree management operations for Repository.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
@@ -9,6 +9,7 @@ use anyhow::Context as _;
 use color_print::cformat;
 use dunce::canonicalize;
 
+use super::config::short_code_key;
 use super::working_tree::{
     operation_in_progress_at, path_to_logging_context, registration_worktree_path,
 };
@@ -621,38 +622,52 @@ impl Repository {
         Ok(ResolvedWorktree::branch_only(token.to_string()))
     }
 
-    /// Short codes for every branch with a worktree, when `[list]
-    /// short-codes` is on; empty otherwise.
+    /// Short codes for every branch with a worktree, branch → code, when
+    /// `[list] short-codes` is on; empty otherwise.
     ///
     /// A code is assigned the first time a worktree is seen and stored in git
     /// config as `worktrunk.state.<branch>.code`, so it never changes while
     /// its worktree exists: a newcomer that wants a taken code moves down the
-    /// ladder in [`assign_short_codes`] instead. `wt list` (which displays
-    /// them) and worktree resolution (which accepts them) both read this one
-    /// map, so the code shown is the code that resolves.
-    pub fn short_codes(&self) -> anyhow::Result<Vec<(String, String)>> {
+    /// ladder in [`assign_short_codes`] instead. A branch whose worktree is
+    /// gone keeps its code only until a newcomer claims it. `wt list` (which
+    /// displays them) and worktree resolution (which accepts them) both read
+    /// this one map, so the code shown is the code that resolves.
+    pub fn short_codes(&self) -> anyhow::Result<HashMap<String, String>> {
         if !self.config().list.short_codes() {
-            return Ok(Vec::new());
+            return Ok(HashMap::new());
         }
         let default_branch = self.default_branch();
-        let stored: Vec<(String, Option<String>)> = self
+        let stored = self.stored_short_codes()?;
+        let active: Vec<(String, Option<String>)> = self
             .list_worktrees()?
             .iter()
             .filter_map(|wt| wt.branch.clone())
             .map(|branch| {
-                let code = self.config_value(&short_code_key(&branch))?;
-                Ok((branch, code))
+                let code = stored.get(&branch).cloned();
+                (branch, code)
             })
-            .collect::<anyhow::Result<_>>()?;
-        let assigned = assign_short_codes(&stored, default_branch.as_deref());
+            .collect();
+        let assigned = assign_short_codes(&active, default_branch.as_deref());
+        let owner: HashMap<&str, &str> = stored
+            .iter()
+            .map(|(branch, code)| (code.as_str(), branch.as_str()))
+            .collect();
+        // A failed write (read-only repo, config lock) leaves this code
+        // unstored, so it may be reassigned next time; not worth failing the
+        // command over.
         for (branch, code) in &assigned {
-            let unchanged = stored
-                .iter()
-                .any(|(b, c)| b == branch && c.as_deref() == Some(code.as_str()));
-            // A failed write (read-only repo, config lock) leaves this code
-            // unstored, so it may be reassigned next time; not worth failing
-            // the command over.
-            if !unchanged && let Err(e) = self.set_config(&short_code_key(branch), code) {
+            if stored.get(branch) == Some(code) {
+                continue;
+            }
+            // Claiming a code from a branch without a worktree: that branch
+            // takes a fresh one if its worktree comes back.
+            if let Some(&previous) = owner.get(code.as_str())
+                && !assigned.contains_key(previous)
+                && let Err(e) = self.unset_config(&short_code_key(previous))
+            {
+                log::debug!("Failed to release short code of {previous}: {e:#}");
+            }
+            if let Err(e) = self.set_config(&short_code_key(branch), code) {
                 log::debug!("Failed to store short code for {branch}: {e:#}");
             }
         }
@@ -926,10 +941,6 @@ fn holds_git_data(path: &Path) -> bool {
     is_bare_repo_dir(path)
 }
 
-fn short_code_key(branch: &str) -> String {
-    format!("worktrunk.state.{branch}.code")
-}
-
 /// Give every branch a unique short code, keeping the codes already stored.
 ///
 /// `stored` pairs each branch that has a worktree with its stored code, if
@@ -940,17 +951,17 @@ fn short_code_key(branch: &str) -> String {
 pub(crate) fn assign_short_codes(
     stored: &[(String, Option<String>)],
     default_branch: Option<&str>,
-) -> Vec<(String, String)> {
+) -> HashMap<String, String> {
     let mut ordered: Vec<&(String, Option<String>)> = stored.iter().collect();
     ordered.sort_by_key(|(branch, _)| (Some(branch.as_str()) != default_branch, branch.as_str()));
 
     let mut taken = HashSet::new();
-    let mut assigned = Vec::with_capacity(ordered.len());
+    let mut assigned = HashMap::with_capacity(ordered.len());
     let mut pending = Vec::new();
     for (branch, code) in ordered {
         match code {
             Some(code) if taken.insert(code.clone()) => {
-                assigned.push((branch.clone(), code.clone()))
+                assigned.insert(branch.clone(), code.clone());
             }
             _ => pending.push(branch),
         }
@@ -960,7 +971,7 @@ pub(crate) fn assign_short_codes(
             .find(|code| !taken.contains(code))
             .expect("candidates are unbounded");
         taken.insert(code.clone());
-        assigned.push((branch.clone(), code));
+        assigned.insert(branch.clone(), code);
     }
     assigned
 }
@@ -1091,7 +1102,9 @@ mod short_code_tests {
             .iter()
             .map(|(b, c)| (b.to_string(), c.map(str::to_string)))
             .collect();
-        let mut codes = assign_short_codes(&stored, Some("main"));
+        let mut codes: Vec<_> = assign_short_codes(&stored, Some("main"))
+            .into_iter()
+            .collect();
         codes.sort();
         codes
     }
@@ -1150,7 +1163,7 @@ mod short_code_tests {
     fn candidates_never_run_out() {
         let stored: Vec<_> = (0..40).map(|i| (format!("c/o{i}"), None)).collect();
         let codes = assign_short_codes(&stored, None);
-        let unique: std::collections::HashSet<_> = codes.iter().map(|(_, c)| c).collect();
+        let unique: std::collections::HashSet<_> = codes.values().collect();
         assert_eq!(unique.len(), 40);
     }
 }

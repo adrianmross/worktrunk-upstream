@@ -657,7 +657,7 @@ pub fn delete_branch_if_safe(
     // behavior for the Worktree path). The user explicitly chose -D.
     if force_delete {
         repo.run_command(&["branch", "-D", "--", branch_name])?;
-        repo.clear_branch_marker(branch_name);
+        repo.clear_branch_state(branch_name);
         return Ok(BranchDeletionResult {
             outcome: BranchDeletionOutcome::ForceDeleted,
             integration_target: target.to_string(),
@@ -687,7 +687,7 @@ pub fn delete_branch_if_safe(
         None => BranchDeletionOutcome::NotDeleted,
     };
     if matches!(outcome, BranchDeletionOutcome::Integrated(_)) {
-        repo.clear_branch_marker(branch_name);
+        repo.clear_branch_state(branch_name);
     }
 
     Ok(BranchDeletionResult {

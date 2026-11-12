@@ -440,6 +440,13 @@
             "null"
           ]
         },
+        "short_code": {
+          "description": "Short code (`[list] short-codes`), accepted wherever a worktree is\nnamed; absent when short codes are off or the row has no worktree.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "summary": {
           "$ref": "#/$defs/Nullable_string",
           "description": "LLM-generated branch summary; absent when summaries are off or none\nwas produced, null while pending."

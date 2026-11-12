@@ -23,7 +23,7 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result};
 use worktrunk::git::{Repository, WorkingTree, WorktreeId};
 use worktrunk::styling::{
-    ColorChoice, fix_dim_after_color_reset, println, terminal_width_for_statusline,
+    ColorChoice, SHORT_CODE, fix_dim_after_color_reset, println, terminal_width_for_statusline,
     truncate_visible,
 };
 
@@ -1063,12 +1063,28 @@ fn git_status_segments(
     // Deduplicate only an inventory worktree whose default branch was already
     // resolved above. A foreign directory's fallback must not start detection
     // (which may contact a remote) just to decide whether to hide its branch.
-    Ok(match (visible_dir, item.branch(), item.worktree_path()) {
+    let mut segments = match (visible_dir, item.branch(), item.worktree_path()) {
         (Some(dir), Some(branch), Some(path)) => {
             filter_redundant_branch(segments, dir, repo, branch, path)
         }
         _ => segments,
-    })
+    };
+    // The short code leads, joined to the branch name when one is shown, and
+    // stays when the directory already names the branch. Read-only: the
+    // prompt never assigns a code.
+    if let Some(code) = item
+        .branch()
+        .and_then(|branch| repo.stored_short_code(branch))
+    {
+        let code = format!("{SHORT_CODE}{code}{SHORT_CODE:#}");
+        match segments.first_mut() {
+            Some(first) if first.kind == Some(ColumnKind::Branch) => {
+                first.content = format!("{code} {}", first.content);
+            }
+            _ => segments.insert(0, StatuslineSegment::from_column(code, ColumnKind::Branch)),
+        }
+    }
+    Ok(segments)
 }
 
 #[cfg(test)]

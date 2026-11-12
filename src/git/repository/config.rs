@@ -173,13 +173,22 @@ impl Repository {
         parsed.marker
     }
 
-    /// Drop the marker of a branch `wt` just deleted or created.
+    /// Drop the marker and short code of a branch `wt` just deleted or created.
     ///
-    /// Markers are keyed by branch name in shared git config, so one left
+    /// Both are keyed by branch name in shared git config, so one left
     /// behind by a deleted branch would reappear on a later branch reusing the
     /// name. Best effort: the branch change already happened, so a failed
     /// unset is logged rather than surfaced.
-    pub fn clear_branch_marker(&self, branch: &str) {
+    pub fn clear_branch_state(&self, branch: &str) {
+        if self
+            .config_last(&short_code_key(branch))
+            .ok()
+            .flatten()
+            .is_some()
+            && let Err(e) = self.unset_config(&short_code_key(branch))
+        {
+            tracing::debug!(error = %e, "Failed to clear short code for branch {branch}: {e}");
+        }
         // `<name>.vars.marker` is also branch `<name>`'s var `marker`; only
         // marker JSON belongs to `branch` (as in `clear_all_markers`).
         if self.branch_marker(branch).is_none() {
@@ -259,6 +268,31 @@ impl Repository {
     ) -> anyhow::Result<std::collections::HashMap<String, std::collections::BTreeMap<String, String>>>
     {
         self.subsection_map_from_snapshot(parse_vars_config_key)
+    }
+
+    /// Every stored short code, branch → code, from the bulk config snapshot
+    /// (one pass, no subprocess). Includes branches that no longer have a
+    /// worktree; [`Self::short_codes`] decides which of those still count.
+    pub fn stored_short_codes(&self) -> anyhow::Result<std::collections::HashMap<String, String>> {
+        let guard = self.all_config()?.read().unwrap();
+        Ok(guard
+            .iter()
+            .filter_map(|(key, values)| {
+                let branch = key
+                    .strip_prefix("worktrunk.state.")?
+                    .strip_suffix(".code")?;
+                Some((branch.to_string(), values.last()?.clone()))
+            })
+            .collect())
+    }
+
+    /// The stored short code for `branch`, without assigning one: for the
+    /// statusline, which must stay read-only and fast.
+    pub fn stored_short_code(&self, branch: &str) -> Option<String> {
+        if !self.config().list.short_codes() {
+            return None;
+        }
+        self.config_last(&short_code_key(branch)).ok().flatten()
     }
 
     /// Get all `branch.<name>.*` git config entries across all branches from
@@ -1116,6 +1150,10 @@ fn parse_vars_config_key(config_key: &str) -> Option<(&str, &str)> {
 /// Git's own section-level branch settings have no subsection and so flatten to
 /// two segments (`branch.sort`, `branch.autoSetupMerge`); after stripping the
 /// prefix they hold no `.`, so `rsplit_once` yields `None` and they're skipped.
+pub(super) fn short_code_key(branch: &str) -> String {
+    format!("worktrunk.state.{branch}.code")
+}
+
 fn parse_branch_config_key(config_key: &str) -> Option<(&str, &str)> {
     config_key.strip_prefix("branch.")?.rsplit_once('.')
 }

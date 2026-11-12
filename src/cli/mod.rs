@@ -1069,6 +1069,7 @@ Item fields:
 | Field | Type | Description |
 |-------|------|-------------|
 | `branch` | string/null | Branch name; null for a detached-HEAD worktree. Remote rows carry the bare name with the remote in `remote` |
+| `short_code` | string | Short code accepted wherever a worktree is named (`wt switch fn`); present with `[list] short-codes = true` on worktree rows |
 | `remote` | string | Remote name, present only on remote-only branch rows |
 | `head` | object/null | HEAD commit (see [head object](#head-object)); null for unborn branches |
 | `worktree` | object | Worktree facts (see [worktree object](#worktree-object)); absent on branch-only rows |
