@@ -393,7 +393,9 @@ impl PickerProgressHandler for PickerHandler {
             // abbreviated HEAD in the Branch column, so that's what the user
             // reads and types. `branch_name`'s `"(detached)"` matches nothing
             // on screen, and collapses every detached row onto one token.
-            let mut search_base = item.display_name().to_string();
+            // The short code leads, so typing it ranks its row first.
+            let mut search_base = item.short_code.clone();
+            search_base.push_str(item.display_name());
             if !path_str.is_empty() {
                 search_base.push(' ');
                 search_base.push_str(&path_str);
