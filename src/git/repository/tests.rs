@@ -1642,6 +1642,65 @@ fn resolve_worktree_does_not_treat_shortcuts_as_paths() {
     assert_eq!(branch.as_deref(), Some(default_branch.as_str()));
 }
 
+/// The `{{ branch | hash }}` code of a worktree's branch resolves to that
+/// worktree, but never shadows a real branch of the same name.
+#[test]
+fn resolve_worktree_accepts_short_code() {
+    use crate::config::short_hash;
+    use crate::git::ResolvedWorktree;
+    use crate::testing::TestRepo;
+
+    let mut test = TestRepo::with_initial_commit();
+    let path = test.add_worktree("feature");
+    let code = short_hash("feature");
+
+    let ResolvedWorktree::Worktree {
+        path: got, branch, ..
+    } = test.repo.resolve_worktree(&code).unwrap()
+    else {
+        panic!("short code {code} should resolve to the feature worktree");
+    };
+    assert_eq!(branch.as_deref(), Some("feature"));
+    assert_eq!(
+        dunce::canonicalize(got).unwrap(),
+        dunce::canonicalize(path).unwrap()
+    );
+
+    test.run_git(&["branch", &code]);
+    let repo = Repository::at(test.root_path()).unwrap();
+    assert!(matches!(
+        repo.resolve_worktree(&code).unwrap(),
+        ResolvedWorktree::BranchOnly { .. }
+    ));
+}
+
+/// Two worktrees sharing a short code is an error naming both, not a guess.
+#[test]
+fn resolve_worktree_short_code_collision_errors() {
+    use crate::config::short_hash;
+    use crate::testing::TestRepo;
+
+    let mut seen = std::collections::HashMap::new();
+    let (a, b) = (0..)
+        .map(|i| format!("b{i}"))
+        .find_map(|name| {
+            let code = short_hash(&name);
+            seen.insert(code, name.clone()).map(|prev| (prev, name))
+        })
+        .unwrap();
+
+    let mut test = TestRepo::with_initial_commit();
+    test.add_worktree(&a);
+    test.add_worktree(&b);
+
+    let err = test
+        .repo
+        .resolve_worktree(&short_hash(&a))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains(&a) && err.contains(&b), "got: {err}");
+}
+
 /// A name matching neither a branch nor a worktree path is branch-only, which
 /// is what lets `wt remove` still delete a worktree-less branch.
 #[test]

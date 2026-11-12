@@ -603,10 +603,47 @@ impl Repository {
         // Nothing matched, so say which of the two the selector was reaching
         // for. Free for an ordinary branch name: `path_selector_directory`
         // returns on `is_valid_branch_name` before touching the filesystem.
-        Ok(match self.path_selector_directory(token) {
-            Some(path) => ResolvedWorktree::NoWorktreeAtPath { path },
-            None => ResolvedWorktree::branch_only(token.to_string()),
-        })
+        if let Some(path) = self.path_selector_directory(token) {
+            return Ok(ResolvedWorktree::NoWorktreeAtPath { path });
+        }
+        if !self.branch(token).exists_locally()?
+            && let Some((path, branch)) = self.worktree_for_short_code(token)?
+        {
+            return Ok(ResolvedWorktree::worktree(path, Some(branch)));
+        }
+        Ok(ResolvedWorktree::branch_only(token.to_string()))
+    }
+
+    /// The worktree whose branch hashes to `code` under the `hash` template
+    /// filter, so a `{{ branch | hash }}` column in `wt list` names a worktree
+    /// `wt switch` accepts.
+    ///
+    /// Last in the ladder: a real branch or path always wins, so only a token
+    /// that would otherwise name nothing gains a meaning. Two worktrees sharing
+    /// a code is an error rather than a guess, since `wt remove` resolves here
+    /// too.
+    fn worktree_for_short_code(&self, code: &str) -> anyhow::Result<Option<(PathBuf, String)>> {
+        if code.len() != 3
+            || !code
+                .bytes()
+                .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase())
+        {
+            return Ok(None);
+        }
+        let mut matches = self.list_worktrees()?.iter().filter_map(|wt| {
+            let branch = wt.branch.as_ref()?;
+            (crate::config::short_hash(branch) == code).then(|| (wt.path.clone(), branch.clone()))
+        });
+        let Some(first) = matches.next() else {
+            return Ok(None);
+        };
+        if let Some((_, other)) = matches.next() {
+            anyhow::bail!(
+                "Short code {code} matches both {} and {other}; use the branch name",
+                first.1
+            );
+        }
+        Ok(Some(first))
     }
 
     /// The branch a selector names, erroring only when it names a detached
