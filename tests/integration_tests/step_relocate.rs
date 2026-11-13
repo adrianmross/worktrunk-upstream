@@ -1896,3 +1896,38 @@ fn test_relocate_main_leaves_shell_in_nested_worktree(repo: TestRepo) {
         "the shell in `other` should stay put, not follow `feature`"
     );
 }
+
+/// A template pointing at a directory that doesn't exist yet (grouping trees
+/// under `<parent>/worktrees/`) relocates into it instead of failing the move.
+#[rstest]
+fn test_relocate_creates_missing_parent_dir(repo: TestRepo) {
+    let parent = worktree_parent(&repo);
+    let wrong_path = parent.join("wrong-location");
+    repo.run_git(&[
+        "worktree",
+        "add",
+        "-b",
+        "feature",
+        wrong_path.to_str().unwrap(),
+    ]);
+    fs::write(
+        repo.test_config_path(),
+        "worktree-path = \"../worktrees/{{ repo }}.{{ branch }}\"\n",
+    )
+    .unwrap();
+    let grouped = parent.join("worktrees");
+    assert!(!grouped.exists());
+
+    let output = repo
+        .wt_command()
+        .args(["step", "relocate", "feature"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(grouped.join("repo.feature").exists());
+    assert!(!wrong_path.exists());
+}
