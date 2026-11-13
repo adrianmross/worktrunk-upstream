@@ -689,6 +689,7 @@ impl<'a> RelocationExecutor<'a> {
         if is_main {
             self.move_main_worktree(idx, default_branch)?;
         } else {
+            create_parent_dir(&dest_path)?;
             let src = src_path.to_string_lossy();
             let dest = dest_path.to_string_lossy();
             self.repo
@@ -810,6 +811,7 @@ impl<'a> RelocationExecutor<'a> {
             let src_display = format_path_for_display(&temp.original_path);
             let dest_display = format_path_for_display(&candidate.expected_path);
 
+            create_parent_dir(&candidate.expected_path)?;
             let src = temp.temp_path.to_string_lossy();
             let dest = candidate.expected_path.to_string_lossy();
             self.repo
@@ -835,6 +837,16 @@ impl<'a> RelocationExecutor<'a> {
 
         Ok(())
     }
+}
+
+/// `git worktree move` doesn't create the destination's parent, so a template
+/// pointing at a new directory (`~/code/<org>/worktrees/...`) would fail.
+fn create_parent_dir(dest: &Path) -> anyhow::Result<()> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", format_path_for_display(parent)))?;
+    }
+    Ok(())
 }
 
 /// Send the shell to the worktree's new path if it stood in the worktree that
