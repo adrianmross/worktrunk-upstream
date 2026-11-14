@@ -9,6 +9,7 @@ use worktrunk::config::UserConfig;
 use worktrunk::git::Repository;
 
 use crate::output::print_json;
+use worktrunk::styling::{eprintln, info_message};
 
 /// Move worktrees to their expected paths based on the `worktree-path` template.
 ///
@@ -39,6 +40,26 @@ pub fn step_relocate(
 
     let repo = Repository::current()?;
     let config = UserConfig::load().context("Failed to load config")?;
+
+    // Reconnect anything moved with plain `mv` first; otherwise git lists it
+    // prunable and it drops out of the plan. A fresh `Repository` rereads the
+    // repaired worktree list.
+    let moved = super::super::relocate::stale_moved_worktrees(&repo, &config)?;
+    let repo = if dry_run {
+        if !moved.is_empty() {
+            eprintln!(
+                "{}",
+                info_message(format!(
+                    "{} moved worktree(s) would be reconnected",
+                    moved.len()
+                ))
+            );
+        }
+        repo
+    } else {
+        super::super::relocate::repair_worktree_links(&repo, &moved)?;
+        Repository::current()?
+    };
     let default_branch = repo.default_branch().unwrap_or_default();
 
     // Validate default branch early - needed for main worktree relocation

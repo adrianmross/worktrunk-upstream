@@ -1931,3 +1931,40 @@ fn test_relocate_creates_missing_parent_dir(repo: TestRepo) {
     assert!(grouped.join("repo.feature").exists());
     assert!(!wrong_path.exists());
 }
+
+/// A worktree moved with plain `mv` to its expected path is prunable to git;
+/// relocate reconnects it instead of leaving it for `wt step prune` to drop.
+#[rstest]
+fn test_relocate_reconnects_worktree_moved_by_hand(repo: TestRepo) {
+    let parent = worktree_parent(&repo);
+    let wrong_path = parent.join("wrong-location");
+    repo.run_git(&[
+        "worktree",
+        "add",
+        "-b",
+        "feature",
+        wrong_path.to_str().unwrap(),
+    ]);
+    let expected = parent.join("repo.feature");
+    fs::rename(&wrong_path, &expected).unwrap();
+    let list = repo.git_output(&["worktree", "list", "--porcelain"]);
+    assert!(list.contains("prunable"), "{list}");
+
+    let output = repo
+        .wt_command()
+        .args(["step", "relocate"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let list = repo.git_output(&["worktree", "list", "--porcelain"]);
+    assert!(!list.contains("prunable"), "{list}");
+    let expected = dunce::canonicalize(&expected).unwrap();
+    assert!(
+        list.contains(&expected.to_slash_lossy().to_string()),
+        "{list}"
+    );
+}

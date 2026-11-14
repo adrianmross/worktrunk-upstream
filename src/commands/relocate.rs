@@ -150,6 +150,54 @@ impl RelocationExecutor<'_> {
 /// Find worktrees that are not at their expected paths.
 ///
 /// Returns candidates for relocation plus a count of template errors encountered.
+/// Linked worktrees git lists as prunable whose checkout sits at its expected
+/// path: moved by hand, typically with a parent directory that also held the
+/// main worktree (`mv ~/code/org ~/code/new-org`).
+pub fn stale_moved_worktrees(
+    repo: &Repository,
+    config: &UserConfig,
+) -> anyhow::Result<Vec<PathBuf>> {
+    Ok(repo
+        .list_worktrees()?
+        .iter()
+        .filter(|wt| wt.prunable.is_some())
+        .filter_map(|wt| compute_worktree_path(repo, wt.branch.as_deref()?, config).ok())
+        .filter(|expected| expected.join(".git").is_file())
+        .collect())
+}
+
+/// Reconnect worktrees moved with plain `mv` before planning any move.
+///
+/// Run from the main worktree, `git worktree repair` re-points every linked
+/// worktree's `.git` file after the main worktree moved; given the new paths of
+/// moved linked worktrees (`moved`, plus the invoking worktree), it re-points
+/// the main's records too. Failure only warns: the relocation that follows
+/// skips what is still disconnected.
+pub fn repair_worktree_links(repo: &Repository, moved: &[PathBuf]) -> anyhow::Result<()> {
+    let current = repo.current_worktree().root().ok();
+    let paths: Vec<String> = moved
+        .iter()
+        .chain(&current)
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    let mut args = vec!["worktree", "repair"];
+    args.extend(paths.iter().map(String::as_str));
+    if let Err(err) = repo.worktree_at(repo.repo_path()?).run_command(&args) {
+        eprintln!(
+            "{}",
+            warning_message(format!("Failed to repair worktree links: {err:#}"))
+        );
+    } else if !moved.is_empty() {
+        let n = moved.len();
+        let noun = if n == 1 { "worktree" } else { "worktrees" };
+        eprintln!(
+            "{}",
+            success_message(format!("Reconnected {n} moved {noun}"))
+        );
+    }
+    Ok(())
+}
+
 pub fn gather_candidates(
     repo: &Repository,
     config: &UserConfig,
