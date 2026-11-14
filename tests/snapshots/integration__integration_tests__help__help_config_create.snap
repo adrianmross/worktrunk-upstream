@@ -132,6 +132,20 @@ Creates [2m~/.config/worktrunk/config.toml[0m with the following content:
 [107m [0m [2m#[0m
 [107m [0m [2m# `~` expands to the home directory. Relative paths resolve from `repo_path`.[0m
 [107m [0m [2m#[0m
+[107m [0m [2m# ### Worktree roots[0m
+[107m [0m [2m#[0m
+[107m [0m [2m# `[worktree-roots]` picks the directory a relative `worktree-path` resolves from, by repository path, so one template serves differently organized directories. Keys are globs over the repository path (`*` stays within one directory, `**` spans any); the first match wins. Values take the template variables above except `branch`.[0m
+[107m [0m [2m#[0m
+[107m [0m [2m# Each `~/code/<org>/<repo>` collects its worktrees in `~/code/<org>/worktrees/`; repositories elsewhere share `~/worktrees/`:[0m
+[107m [0m [2m#[0m
+[107m [0m [2m# worktree-path = "{{ repo }}.{{ branch | sanitize }}"[0m
+[107m [0m [2m#[0m
+[107m [0m [2m# [worktree-roots][0m
+[107m [0m [2m# "~/code/*/*" = "{{ repo_path }}/../worktrees"[0m
+[107m [0m [2m# "**" = "~/worktrees"[0m
+[107m [0m [2m#[0m
+[107m [0m [2m# With no match, relative paths resolve from `repo_path`. `wt step relocate` moves existing worktrees after a change.[0m
+[107m [0m [2m#[0m
 [107m [0m [2m# ## LLM commit messages[0m
 [107m [0m [2m#[0m
 [107m [0m [2m# Generate commit messages automatically during merge. Requires an external CLI tool.[0m

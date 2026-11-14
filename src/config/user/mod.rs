@@ -619,6 +619,18 @@ pub struct UserConfig {
     )]
     pub worktree_path: Option<String>,
 
+    /// Where relative `worktree-path` templates resolve, chosen by repository
+    /// path. Keys are globs over the repository path (`~` expands, `*` stays
+    /// within one directory, `**` spans any); the first match wins. Values are
+    /// templates taking the `worktree-path` variables except `branch`.
+    #[serde(
+        rename = "worktree-roots",
+        default,
+        skip_serializing_if = "indexmap::IndexMap::is_empty"
+    )]
+    #[schemars(with = "std::collections::BTreeMap<String, String>")]
+    pub worktree_roots: indexmap::IndexMap<String, String>,
+
     /// Configuration for the `wt list` command
     #[serde(default, skip_serializing_if = "super::is_default")]
     pub list: sections::ListConfig,

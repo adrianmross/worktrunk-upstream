@@ -245,6 +245,7 @@ urlencoding = "2.1"
 # `GitRemoteUrl`; Worktrunk keeps only the namespace/repo and forge policy.
 gix-url = "0.40"
 regex = "1.12.3"
+globset = "0.4.18"
 ignore = "0.4"
 reflink-copy = "0.1"
 # Atomic, no-overwrite rename (renameat2 / renamex_np / MoveFileExW) for

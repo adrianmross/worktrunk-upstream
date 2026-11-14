@@ -265,3 +265,43 @@ fn test_eval_expected_worktree_path_of_branch_in_worktree_path_template(repo: Te
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// `[worktree-roots]` picks where a relative `worktree-path` resolves by the
+/// repository's path: the first matching glob wins, and with no match the
+/// path resolves from `repo_path` as before.
+#[rstest]
+fn test_eval_expected_worktree_path_with_worktree_roots(repo: TestRepo) {
+    let parent = dunce::canonicalize(repo.root_path().parent().unwrap()).unwrap();
+    let parent = parent.to_str().unwrap().replace('\\', "/");
+    let eval = |config: String| {
+        repo.write_test_config(&config);
+        let output = repo
+            .wt_command()
+            .args([
+                "step",
+                "eval",
+                "{{ expected_worktree_path_of_branch('feature/x') }}",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .replace('\\', "/")
+    };
+    let template = "worktree-path = \"{{ repo }}.{{ branch | sanitize }}\"\n";
+
+    let matched = eval(format!(
+        "{template}[worktree-roots]\n\"{parent}/*\" = \"{{{{ repo_path }}}}/../grouped\"\n\"**\" = \"/elsewhere\"\n"
+    ));
+    assert_eq!(matched, format!("{parent}/grouped/repo.feature-x"));
+
+    let unmatched = eval(format!(
+        "{template}[worktree-roots]\n\"/no/such/dir/*\" = \"/elsewhere\"\n"
+    ));
+    assert!(unmatched.ends_with("/repo/repo.feature-x"), "{unmatched}");
+}
