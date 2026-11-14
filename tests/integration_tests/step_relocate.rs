@@ -2006,3 +2006,62 @@ fn test_relocate_runs_post_switch_at_new_path(repo: TestRepo) {
     let ran_at = fs::read_to_string(&marker).unwrap();
     assert!(ran_at.ends_with("repo.feature"), "{ran_at}");
 }
+
+/// `git worktree move` refuses worktrees with submodules; relocate moves them
+/// and keeps each submodule checkout connected.
+#[rstest]
+fn test_relocate_moves_worktree_with_submodule(repo: TestRepo) {
+    let parent = worktree_parent(&repo);
+    let lib = parent.join("lib");
+    fs::create_dir_all(&lib).unwrap();
+    repo.run_git_in(&lib, &["init", "-q", "-b", "main"]);
+    repo.run_git_in(&lib, &["commit", "-q", "--allow-empty", "-m", "lib"]);
+    let lib_url = lib.to_slash_lossy().to_string();
+    repo.run_git(&[
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "-q",
+        &lib_url,
+        "vendor/lib",
+    ]);
+    repo.run_git(&["commit", "-q", "-m", "Add submodule"]);
+    let wrong_path = parent.join("wrong-location");
+    repo.run_git(&[
+        "worktree",
+        "add",
+        "-b",
+        "feature",
+        wrong_path.to_str().unwrap(),
+    ]);
+    repo.run_git_in(
+        &wrong_path,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "update",
+            "-q",
+            "--init",
+        ],
+    );
+
+    let output = repo
+        .wt_command()
+        .args(["step", "relocate", "feature"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let moved = parent.join("repo.feature");
+    assert!(!wrong_path.exists());
+    // Panics if the submodule's links still point at the old checkout.
+    repo.run_git_in(&moved.join("vendor/lib"), &["status", "--short"]);
+    repo.run_git_in(&moved, &["submodule", "status"]);
+    let list = repo.git_output(&["worktree", "list", "--porcelain"]);
+    assert!(!list.contains("prunable"), "{list}");
+}
