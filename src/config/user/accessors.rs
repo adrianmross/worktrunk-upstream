@@ -255,25 +255,35 @@ impl UserConfig {
             Some(p) => self.worktree_path_for_project(p),
             None => self.worktree_path(),
         };
-        // Use native path format (not POSIX) since this is used for filesystem operations
-        let repo_path = repo.repo_path()?.to_string_lossy().to_string();
-        let mut vars = HashMap::new();
-        vars.insert("repo", main_worktree);
-        vars.insert("branch", branch);
-        vars.insert("repo_path", repo_path.as_str());
-        let parsed_remote = repo.primary_remote_parsed_url();
-        if let Some(ref parsed_remote) = parsed_remote {
-            vars.insert("owner", parsed_remote.owner());
-            vars.insert("remote_repo", parsed_remote.repo());
-        }
-        Ok(expand_template(
+        render_path_template(
             &template,
-            &vars,
-            ShellEscapeMode::Literal,
+            main_worktree,
+            Some(branch),
             repo,
             "worktree-path",
         )
-        .map(|p| shellexpand::tilde(&p).into_owned())?)
+    }
+
+    /// The `worktree-roots` entry for this repository, rendered: the directory a
+    /// relative `worktree-path` resolves from. `None` when no pattern matches.
+    pub fn worktree_root(
+        &self,
+        repo: &crate::git::Repository,
+        repo_name: &str,
+    ) -> anyhow::Result<Option<PathBuf>> {
+        let repo_root = repo.repo_path()?;
+        for (pattern, root) in &self.worktree_roots {
+            let matcher = globset::GlobBuilder::new(&shellexpand::tilde(pattern))
+                .literal_separator(true)
+                .build()
+                .map_err(|e| anyhow::anyhow!("Invalid worktree-roots pattern {pattern:?}: {e}"))?
+                .compile_matcher();
+            if matcher.is_match(repo_root) {
+                let rendered = render_path_template(root, repo_name, None, repo, "worktree-roots")?;
+                return Ok(Some(repo_root.join(rendered).normalize()));
+            }
+        }
+        Ok(None)
     }
 
     /// Compute the expected worktree path for a branch name.
@@ -315,7 +325,37 @@ impl UserConfig {
 
         let project = repo.project_identifier().ok();
         let expanded_path = self.format_path(repo_name, branch, repo, project.as_ref())?;
+        let base = self
+            .worktree_root(repo, repo_name)?
+            .unwrap_or_else(|| repo_root.to_path_buf());
 
-        Ok(repo_root.join(expanded_path).normalize())
+        Ok(base.join(expanded_path).normalize())
     }
+}
+
+/// Render a path template with the `worktree-path` variables, expanding `~`.
+fn render_path_template(
+    template: &str,
+    repo_name: &str,
+    branch: Option<&str>,
+    repo: &crate::git::Repository,
+    name: &str,
+) -> anyhow::Result<String> {
+    // Use native path format (not POSIX) since this is used for filesystem operations
+    let repo_path = repo.repo_path()?.to_string_lossy().to_string();
+    let mut vars = HashMap::new();
+    vars.insert("repo", repo_name);
+    if let Some(branch) = branch {
+        vars.insert("branch", branch);
+    }
+    vars.insert("repo_path", repo_path.as_str());
+    let parsed_remote = repo.primary_remote_parsed_url();
+    if let Some(ref parsed_remote) = parsed_remote {
+        vars.insert("owner", parsed_remote.owner());
+        vars.insert("remote_repo", parsed_remote.repo());
+    }
+    Ok(
+        expand_template(template, &vars, ShellEscapeMode::Literal, repo, name)
+            .map(|p| shellexpand::tilde(&p).into_owned())?,
+    )
 }
