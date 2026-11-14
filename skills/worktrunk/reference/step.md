@@ -903,6 +903,14 @@ Move specific worktrees:
 $ wt step relocate feature bugfix
 ```
 
+### Moving a repository
+
+After moving a repository or its parent directory with `mv`, run
+`wt step relocate` inside it. It reconnects Git's links to worktrees that
+moved along, then moves the rest to their expected paths.
+
+Each moved worktree runs its `post-switch` hooks at the new path.
+
 ### Swap handling
 
 When worktrees are at each other's expected locations (e.g., `alpha` at
