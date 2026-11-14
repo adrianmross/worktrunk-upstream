@@ -9,7 +9,12 @@ use worktrunk::config::UserConfig;
 use worktrunk::git::Repository;
 
 use crate::output::print_json;
+use worktrunk::HookType;
 use worktrunk::styling::{eprintln, info_message};
+
+use super::super::command_executor::CommandContext;
+use super::super::hook_plan::{ApprovedHookPlan, HookPlanBuilder, register_planned};
+use super::super::hooks::HookAnnouncer;
 
 /// Move worktrees to their expected paths based on the `worktree-path` template.
 ///
@@ -172,6 +177,20 @@ pub fn step_relocate(
         return Ok(());
     }
 
+    // A moved worktree reruns its post-switch hooks: per-path setup (a dev-shell
+    // cache, absolute symlinks) belongs to the old path. Approved here, before
+    // anything moves, and anchored at each destination.
+    let project_id = repo.project_identifier().ok();
+    let project_config = repo.load_project_config()?;
+    let mut builder = HookPlanBuilder::new(project_config.as_ref(), &config, project_id.as_ref());
+    for c in &validated {
+        builder.add(&c.expected_path, &[HookType::PostSwitch]);
+    }
+    let plan = builder
+        .finish()
+        .approve(project_id.as_ref(), false)?
+        .unwrap_or_else(ApprovedHookPlan::empty);
+
     // Phase 3 & 4: Create executor (classifies targets) and execute relocations
     let mut executor = match RelocationExecutor::new(&repo, validated, clobber) {
         Ok(executor) => executor,
@@ -192,6 +211,21 @@ pub fn step_relocate(
     // root (#3723).
     let cwd = worktrunk::shell_exec::shell_cwd();
     let execution = executor.execute(&default_branch, cwd.as_deref());
+
+    let mut announcer = HookAnnouncer::new(&repo, true);
+    for entry in &executor.relocated_entries {
+        let ctx = CommandContext::new(&repo, &config, Some(&entry.branch), &entry.to, false);
+        register_planned(
+            &mut announcer,
+            &plan,
+            &entry.to,
+            &ctx,
+            HookType::PostSwitch,
+            &[],
+            None,
+        )?;
+    }
+    announcer.flush()?;
 
     if json_mode {
         print_relocations(

@@ -1968,3 +1968,41 @@ fn test_relocate_reconnects_worktree_moved_by_hand(repo: TestRepo) {
         "{list}"
     );
 }
+
+/// A relocated worktree reruns post-switch at its new path, so per-path setup
+/// (a dev-shell cache) follows the move.
+#[rstest]
+fn test_relocate_runs_post_switch_at_new_path(repo: TestRepo) {
+    let parent = worktree_parent(&repo);
+    let wrong_path = parent.join("wrong-location");
+    repo.run_git(&[
+        "worktree",
+        "add",
+        "-b",
+        "feature",
+        wrong_path.to_str().unwrap(),
+    ]);
+    let marker = parent.join("post-switch-ran");
+    fs::write(
+        repo.test_config_path(),
+        format!(
+            "[post-switch]\nmark = \"printf '%s' '{{{{ worktree_path }}}}' > '{}'\"\n",
+            marker.to_slash_lossy()
+        ),
+    )
+    .unwrap();
+
+    let output = repo
+        .wt_command()
+        .args(["step", "relocate", "feature"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    worktrunk::testing::wait_for_file_content(&marker);
+    let ran_at = fs::read_to_string(&marker).unwrap();
+    assert!(ran_at.ends_with("repo.feature"), "{ran_at}");
+}
