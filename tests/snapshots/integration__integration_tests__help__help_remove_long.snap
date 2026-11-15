@@ -172,6 +172,12 @@ Before [2m--force[0m discards uncommitted changes, Worktrunk saves them (excep
 
 Use [2m--no-delete-branch[0m to keep the branch regardless of merge status.
 
+[1m[32mRecovering a removed branch[0m
+
+Every removal appends a JSON line to [2m.git/wt/removed.log[0m with the time, branch, commit SHA, worktree path, and the coding agent that ran it ([2mclaude-code[0m, [2mcodex[0m, or [2mnull[0m); a deleted branch gets its own [2mdelete_branch[0m line. Recreate a branch from its SHA:
+
+[107m [0m [2m[0m[2m[34mgit[0m[2m branch feature [0m[2m[36m<[0m[2msha[0m[2m[36m>[0m
+
 [1m[32mBackground removal[0m
 
 Removal runs in the background by default — the command returns immediately, and output goes to [2m.git/wt/logs/{branch}/internal/remove.log[0m. Use [2m--foreground[0m to wait for it.
