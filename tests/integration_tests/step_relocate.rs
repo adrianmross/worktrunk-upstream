@@ -2065,3 +2065,95 @@ fn test_relocate_moves_worktree_with_submodule(repo: TestRepo) {
     let list = repo.git_output(&["worktree", "list", "--porcelain"]);
     assert!(!list.contains("prunable"), "{list}");
 }
+
+/// A second repository beside `repo`, with `feature` at a mismatched path.
+fn sibling_repo(repo: &TestRepo, name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let parent = worktree_parent(repo);
+    let root = parent.join(name);
+    fs::create_dir_all(&root).unwrap();
+    repo.run_git_in(&root, &["init", "-q", "-b", "main"]);
+    repo.run_git_in(&root, &["commit", "-q", "--allow-empty", "-m", "init"]);
+    let wrong = parent.join(format!("{name}-wrong"));
+    let wrong_str = wrong.to_str().unwrap();
+    repo.run_git_in(
+        &root,
+        &["worktree", "add", "-q", "-b", "feature", wrong_str],
+    );
+    (root, wrong)
+}
+
+fn relocate_repos(repo: &TestRepo, extra: &[&str], repos: &[&Path]) -> std::process::Output {
+    let mut cmd = repo.wt_command();
+    cmd.args(["step", "relocate"]).args(extra).arg("--repo");
+    cmd.args(repos).output().unwrap()
+}
+
+/// `--repo` relocates each repository in turn and skips paths that aren't a
+/// repository's primary checkout (a plain directory, a linked worktree), and
+/// passes over plain files a shell glob also matched.
+#[rstest]
+fn test_relocate_repos(repo: TestRepo) {
+    let parent = worktree_parent(&repo);
+    let (alpha, alpha_wrong) = sibling_repo(&repo, "alpha");
+    let (beta, beta_wrong) = sibling_repo(&repo, "beta");
+    let plain = parent.join("plain");
+    fs::create_dir_all(&plain).unwrap();
+    let file = parent.join("notes.md");
+    fs::write(&file, "").unwrap();
+
+    let output = relocate_repos(
+        &repo,
+        &[],
+        &[&alpha_wrong, &alpha, &plain, &file, &beta, &alpha],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(stderr.matches("Skipping").count(), 2, "{stderr}");
+    assert_eq!(stderr.matches("Relocating in").count(), 2, "{stderr}");
+    assert!(parent.join("alpha.feature").exists(), "{stderr}");
+    assert!(parent.join("beta.feature").exists(), "{stderr}");
+    assert!(!alpha_wrong.exists() && !beta_wrong.exists());
+}
+
+/// `--format=json` would print one document per repository, so it's refused.
+#[rstest]
+fn test_relocate_repos_rejects_json(repo: TestRepo) {
+    let output = relocate_repos(&repo, &["--format=json"], &[repo.root_path()]);
+    assert!(!output.status.success());
+}
+
+/// A repository that fails doesn't stop the next one; the command still exits
+/// nonzero.
+#[rstest]
+fn test_relocate_repos_continues_after_failure(repo: TestRepo) {
+    let parent = worktree_parent(&repo);
+    let (broken, _) = sibling_repo(&repo, "broken");
+    // No remote and no standard branch name: default branch undetectable.
+    repo.run_git_in(&broken, &["branch", "-m", "main", "trunk-a"]);
+    let (good, good_wrong) = sibling_repo(&repo, "good");
+
+    let output = relocate_repos(&repo, &[], &[&broken, &good]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("Cannot determine default branch"),
+        "{stderr}"
+    );
+    assert!(parent.join("good.feature").exists(), "{stderr}");
+    assert!(!good_wrong.exists());
+}
+
+/// `--dry-run` applies to every repository.
+#[rstest]
+fn test_relocate_repos_dry_run(repo: TestRepo) {
+    let parent = worktree_parent(&repo);
+    let (alpha, alpha_wrong) = sibling_repo(&repo, "alpha");
+    let (beta, beta_wrong) = sibling_repo(&repo, "beta");
+
+    let output = relocate_repos(&repo, &["--dry-run"], &[&alpha, &beta]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(alpha_wrong.exists() && beta_wrong.exists(), "{stderr}");
+    assert!(!parent.join("alpha.feature").exists());
+    assert!(!parent.join("beta.feature").exists());
+}
