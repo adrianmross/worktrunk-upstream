@@ -86,6 +86,14 @@ Before `--force` discards uncommitted changes, Worktrunk saves them (except igno
 
 Use `--no-delete-branch` to keep the branch regardless of merge status.
 
+## Recovering a removed branch
+
+Every removal appends a JSON line to `.git/wt/removed.log` with the time, branch, commit SHA, worktree path, and the coding agent that ran it (`claude-code`, `codex`, or `null`); a deleted branch gets its own `delete_branch` line. Recreate a branch from its SHA:
+
+```console
+$ git branch feature <sha>
+```
+
 ## Background removal
 
 Removal runs in the background by default — the command returns immediately, and output goes to `.git/wt/logs/{branch}/internal/remove.log`. Use `--foreground` to wait for it.

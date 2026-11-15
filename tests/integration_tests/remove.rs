@@ -6815,3 +6815,44 @@ fn test_remove_worktree_git_failure_preserves_context(mut repo: TestRepo) {
             .unwrap()
     );
 }
+
+/// Removal appends recovery records to `.git/wt/removed.log`: the worktree's
+/// HEAD at removal, and the tip of the deleted branch.
+#[rstest]
+fn test_remove_writes_removal_log(mut repo: TestRepo) {
+    let worktree_path = repo.add_worktree("feature-log");
+    let sha = repo.git_output(&["rev-parse", "feature-log"]);
+
+    let output = repo
+        .wt_command()
+        .env("CLAUDECODE", "1")
+        .args(["remove", "--yes", "feature-log"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let log = fs::read_to_string(repo.root_path().join(".git/wt/removed.log")).unwrap();
+    let entries: Vec<serde_json::Value> = log
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let events: Vec<&str> = entries
+        .iter()
+        .map(|e| e["event"].as_str().unwrap())
+        .collect();
+    assert_eq!(events, ["remove_worktree", "delete_branch"]);
+    for entry in &entries {
+        assert_eq!(entry["branch"], "feature-log");
+        assert_eq!(entry["sha"], sha.as_str());
+        assert_eq!(entry["agent"], "claude-code");
+        assert!(entry["time"].as_str().unwrap().ends_with('Z'));
+    }
+    assert_eq!(
+        Path::new(entries[0]["path"].as_str().unwrap()),
+        worktree_path
+    );
+}

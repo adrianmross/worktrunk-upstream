@@ -550,7 +550,53 @@ pub fn stage_worktree_removal(
         worktree.ensure_clean_without_fsmonitor("remove worktree", branch, true)?;
     }
 
-    Ok(rename_into_trash(repo, worktree_path, &git_dir))
+    // Read HEAD while the directory still exists; the log is what recovers
+    // the branch tip once both are gone.
+    let sha = worktree.head_sha().ok().flatten();
+    let staged = rename_into_trash(repo, worktree_path, &git_dir);
+    log_removal(
+        repo,
+        "remove_worktree",
+        branch,
+        sha.as_deref(),
+        Some(worktree_path),
+    );
+    Ok(staged)
+}
+
+/// Append one JSON line to `<git-common-dir>/wt/removed.log`, so a removed
+/// branch can be recreated with `git branch <branch> <sha>`. Best-effort: a
+/// failed write never fails the removal.
+fn log_removal(
+    repo: &Repository,
+    event: &str,
+    branch: Option<&str>,
+    sha: Option<&str>,
+    path: Option<&Path>,
+) {
+    use std::io::Write as _;
+    let agent = if std::env::var_os("CLAUDECODE").is_some() {
+        Some("claude-code")
+    } else if std::env::var_os("CODEX_THREAD_ID").is_some() {
+        Some("codex")
+    } else {
+        None
+    };
+    let mut line = serde_json::json!({
+        "time": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "event": event,
+        "branch": branch,
+        "sha": sha,
+        "path": path,
+        "agent": agent,
+    })
+    .to_string();
+    line.push('\n');
+    if let Err(e) = crate::utils::open_log_file(&repo.wt_dir(), Path::new("removed.log"), true)
+        .and_then(|mut file| file.write_all(line.as_bytes()))
+    {
+        tracing::debug!(error = %e, "Failed to append removal log: {e}");
+    }
 }
 
 /// Find a registered worktree contained in `worktree_path`, using a fresh
@@ -656,7 +702,22 @@ pub fn delete_branch_if_safe(
     // Force-delete: skip integration check entirely (matches compute_integration_reason
     // behavior for the Worktree path). The user explicitly chose -D.
     if force_delete {
+        let sha = repo
+            .run_command(&[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{branch_name}"),
+            ])
+            .ok();
         repo.run_command(&["branch", "-D", "--", branch_name])?;
+        log_removal(
+            repo,
+            "delete_branch",
+            Some(branch_name),
+            sha.as_deref().map(str::trim),
+            None,
+        );
         repo.clear_branch_marker(branch_name);
         return Ok(BranchDeletionResult {
             outcome: BranchDeletionOutcome::ForceDeleted,
@@ -687,6 +748,10 @@ pub fn delete_branch_if_safe(
         None => BranchDeletionOutcome::NotDeleted,
     };
     if matches!(outcome, BranchDeletionOutcome::Integrated(_)) {
+        let sha = snapshot
+            .local_branch(branch_name)
+            .map(|b| b.commit_sha.as_str());
+        log_removal(repo, "delete_branch", Some(branch_name), sha, None);
         repo.clear_branch_marker(branch_name);
     }
 
