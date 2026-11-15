@@ -2132,6 +2132,22 @@ worktree-path = "{{ repo_path }}/../{{ branch | sanitize }}"
 
 `~` expands to the home directory. Relative paths resolve from `repo_path`.
 
+### Worktree roots
+
+`[worktree-roots]` picks the directory a relative `worktree-path` resolves from, by repository path, so one template serves differently organized directories. Keys are globs over the repository path (`*` stays within one directory, `**` spans any); the first match wins. Values take the template variables above except `branch`.
+
+Each `~/code/<org>/<repo>` collects its worktrees in `~/code/<org>/worktrees/`; repositories elsewhere share `~/worktrees/`:
+
+```toml
+worktree-path = "{{ repo }}.{{ branch | sanitize }}"
+
+[worktree-roots]
+"~/code/*/*" = "{{ repo_path }}/../worktrees"
+"**" = "~/worktrees"
+```
+
+With no match, relative paths resolve from `repo_path`. `wt step relocate` moves existing worktrees after a change.
+
 ## LLM commit messages
 
 Generate commit messages automatically during merge. Requires an external CLI tool.

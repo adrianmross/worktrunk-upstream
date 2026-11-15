@@ -180,6 +180,20 @@ Bare repository cloned to [2m~/code/myproject/.git[0m ([2m~/code/myproject/fe
 
 [2m~[0m expands to the home directory. Relative paths resolve from [2mrepo_path[0m.
 
+[32mWorktree roots[0m
+
+[2m[worktree-roots][0m picks the directory a relative [2mworktree-path[0m resolves from, by repository path, so one template serves differently organized directories. Keys are globs over the repository path ([2m*[0m stays within one directory, [2m**[0m spans any); the first match wins. Values take the template variables above except [2mbranch[0m.
+
+Each [2m~/code/<org>/<repo>[0m collects its worktrees in [2m~/code/<org>/worktrees/[0m; repositories elsewhere share [2m~/worktrees/[0m:
+
+[107m [0m [2mworktree-path = [0m[2m[32m"{{ repo }}.{{ branch | sanitize }}"[0m
+[107m [0m 
+[107m [0m [2m[36m[worktree-roots][0m
+[107m [0m [2m[32m"~/code/*/*"[0m[2m = [0m[2m[32m"{{ repo_path }}/../worktrees"[0m
+[107m [0m [2m[32m"**"[0m[2m = [0m[2m[32m"~/worktrees"[0m
+
+With no match, relative paths resolve from [2mrepo_path[0m. [2mwt step relocate[0m moves existing worktrees after a change.
+
 [1m[32mLLM commit messages[0m
 
 Generate commit messages automatically during merge. Requires an external CLI tool.
