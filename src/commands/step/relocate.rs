@@ -61,6 +61,10 @@ pub fn step_relocate(
     let mut seen = HashSet::new();
     let mut failed = false;
     for path in repos.iter().map(resolve_input_path) {
+        // A shell glob like `~/code/org/*` also matches plain files.
+        if !path.is_dir() {
+            continue;
+        }
         let display = format_path_for_display(&path);
         let repo = match Repository::at(path.clone()) {
             Ok(repo) if repo.repo_path().is_ok_and(|root| paths_match(root, &path)) => repo,

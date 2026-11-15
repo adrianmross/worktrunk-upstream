@@ -2149,7 +2149,8 @@ fn relocate_repos(repo: &TestRepo, extra: &[&str], repos: &[&Path]) -> std::proc
 }
 
 /// `--repo` relocates each repository in turn and skips paths that aren't a
-/// repository's primary checkout (a plain directory, a linked worktree).
+/// repository's primary checkout (a plain directory, a linked worktree), and
+/// passes over plain files a shell glob also matched.
 #[rstest]
 fn test_relocate_repos(repo: TestRepo) {
     let parent = worktree_parent(&repo);
@@ -2157,8 +2158,14 @@ fn test_relocate_repos(repo: TestRepo) {
     let (beta, beta_wrong) = sibling_repo(&repo, "beta");
     let plain = parent.join("plain");
     fs::create_dir_all(&plain).unwrap();
+    let file = parent.join("notes.md");
+    fs::write(&file, "").unwrap();
 
-    let output = relocate_repos(&repo, &[], &[&alpha_wrong, &alpha, &plain, &beta, &alpha]);
+    let output = relocate_repos(
+        &repo,
+        &[],
+        &[&alpha_wrong, &alpha, &plain, &file, &beta, &alpha],
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
     assert_eq!(stderr.matches("Skipping").count(), 2, "{stderr}");
