@@ -145,6 +145,7 @@ Worktrunk stores repository state, caches, and logs under `.git/`:
 | `.git/wt/logs/diagnostic.md` | Diagnostic report for issue reporting (leads with the performance profile) | Running with `-vv` |
 | `.git/wt/trash/<name>-<timestamp>` | Staged worktree contents pending background deletion | `wt remove` |
 | `.git/wt/trash.lock` | Lock for background trash deletion | `wt remove` |
+| `.git/wt/removed.log` | Record of removed worktrees and deleted branches, with each branch's SHA for [recovery](https://worktrunk.dev/remove/#recovering-a-removed-branch) | `wt remove`, `wt merge`, `wt step prune` |
 
 None of this is tracked by git or pushed to remotes.
 
