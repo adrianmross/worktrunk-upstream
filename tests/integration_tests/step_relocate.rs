@@ -2065,3 +2065,63 @@ fn test_relocate_moves_worktree_with_submodule(repo: TestRepo) {
     let list = repo.git_output(&["worktree", "list", "--porcelain"]);
     assert!(!list.contains("prunable"), "{list}");
 }
+
+/// A worktree with a running process inside stays put, in a dry run and a real
+/// one; once the process exits, a rerun moves it.
+#[cfg(unix)]
+#[rstest]
+fn test_relocate_skips_worktree_with_running_process(repo: TestRepo) {
+    use std::process::{Command, Stdio};
+
+    let parent = worktree_parent(&repo);
+    let wrong_path = parent.join("wrong-location");
+    repo.run_git(&[
+        "worktree",
+        "add",
+        "-b",
+        "feature",
+        wrong_path.to_str().unwrap(),
+    ]);
+    let expected = parent.join("repo.feature");
+
+    let mut child = Command::new("sleep")
+        .arg("30")
+        .current_dir(&wrong_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let canonical = dunce::canonicalize(&wrong_path).unwrap();
+    crate::common::wait_for(&format!("child {pid} in cwd discovery"), || {
+        worktrunk::git::reap::processes_under(&canonical)
+            .iter()
+            .any(|p| p.pid == pid)
+    });
+
+    let relocate = |args: &[&str]| {
+        let output = repo
+            .wt_command()
+            .args(["step", "relocate"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    };
+
+    for args in [&["--dry-run"][..], &[]] {
+        let stderr = relocate(args);
+        assert!(stderr.contains("Skipping"), "{stderr}");
+        assert!(stderr.contains("1 running process inside"), "{stderr}");
+        assert!(stderr.contains(&format!("{pid} sleep")), "{stderr}");
+        assert!(wrong_path.exists() && !expected.exists());
+    }
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let stderr = relocate(&[]);
+    assert!(!stderr.contains("Skipping"), "{stderr}");
+    assert!(expected.exists() && !wrong_path.exists(), "{stderr}");
+}

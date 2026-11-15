@@ -20,6 +20,8 @@ pub use paths::{
     fish_completion_path, fish_config_dir, home_dir_required, line_based_config_paths,
     nushell_autoload_candidates, profile_query_interruption,
 };
+#[cfg(unix)]
+pub(crate) use utils::process_name_and_ppid;
 pub use utils::{
     AncestorShell, ZshStartupScope, ancestor_shell, current_shell, current_shell_name,
     extract_filename_from_path, probe_zsh_compdef,
