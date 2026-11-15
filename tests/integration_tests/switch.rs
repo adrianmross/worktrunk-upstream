@@ -9609,6 +9609,8 @@ fn test_switch_create_names_branch_left_by_failed_worktree_add(repo: TestRepo, #
     // directories would go is the portable way to fail git exactly there.
     repo.write_test_config(r#"worktree-path = "blocked/{{ branch | sanitize }}""#);
     fs::write(repo.root_path().join("blocked"), "not a directory").unwrap();
+    // Ignored, so the nested-path guard lets git reach the failure.
+    fs::write(repo.root_path().join(".gitignore"), "blocked\n").unwrap();
 
     let mut cmd = repo.wt_command();
     cmd.args(["switch", "--create", "stranded"]);
@@ -9965,4 +9967,48 @@ fn switch_existing_without_cd(mut repo: TestRepo, #[case] configured: bool) {
         assert!(fs::read_to_string(&cd_path).unwrap().is_empty());
     });
     assert!(feature.is_dir());
+}
+
+#[rstest]
+fn test_switch_create_refuses_template_nested_in_repo(repo: TestRepo) {
+    // A relative template resolves from the repo root, nesting the worktree
+    // inside the main checkout where it shows as untracked.
+    repo.write_test_config(r#"worktree-path = "{{ repo }}.{{ branch | sanitize }}""#);
+
+    let output = repo
+        .wt_command()
+        .args(["switch", "--create", "nested"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr)
+        .ansi_strip()
+        .into_owned();
+    assert!(
+        stderr.contains("worktree-path template resolves inside the repository")
+            && stderr.contains("repo.nested")
+            && stderr.contains(".gitignore"),
+        "stderr: {stderr}"
+    );
+    assert!(!repo.root_path().join("repo.nested").exists());
+    let worktrees = repo.git_output(&["worktree", "list", "--porcelain"]);
+    assert!(!worktrees.contains("refs/heads/nested"), "{worktrees}");
+}
+
+#[rstest]
+fn test_switch_create_allows_ignored_template_nested_in_repo(repo: TestRepo) {
+    repo.write_test_config(r#"worktree-path = "{{ repo }}.{{ branch | sanitize }}""#);
+    fs::write(repo.root_path().join(".gitignore"), "/repo.*\n").unwrap();
+
+    let output = repo
+        .wt_command()
+        .args(["switch", "--create", "nested"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(repo.root_path().join("repo.nested").exists());
 }
