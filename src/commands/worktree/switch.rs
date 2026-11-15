@@ -1055,7 +1055,11 @@ fn plan_switch(
             reject_path_overlapping_worktrees(repo, &path)?;
             path
         }
-        None => compute_worktree_path(repo, &branch, config)?,
+        None => {
+            let path = compute_worktree_path(repo, &branch, config)?;
+            reject_template_path_nested_in_repo(repo, &path)?;
+            path
+        }
     };
 
     // Phase 4: Validate we can create at this path
@@ -1077,6 +1081,42 @@ fn plan_switch(
         needs_clobber_backup,
         new_previous,
     })
+}
+
+/// Refuse a template-derived path nested in the primary worktree, where the
+/// new worktree would show as untracked in its `git status`.
+///
+/// Dot-prefixed directories (the documented `.worktrees/` layout) and
+/// gitignored locations are allowed.
+fn reject_template_path_nested_in_repo(repo: &Repository, path: &Path) -> anyhow::Result<()> {
+    let Some(root) = repo.primary_worktree()? else {
+        return Ok(());
+    };
+    let root = canonicalize_with_parents(&root);
+    let path = canonicalize_with_parents(path);
+    let Ok(relative) = path.strip_prefix(&root) else {
+        return Ok(());
+    };
+    let Some(first) = relative.components().next() else {
+        return Ok(());
+    };
+    if first.as_os_str().to_string_lossy().starts_with('.') {
+        return Ok(());
+    }
+    let relative = relative.to_string_lossy();
+    let args = ["check-ignore", "-q", "--", &relative];
+    let output = repo.worktree_at(&root).run_command_output(&args)?;
+    match output.status.code() {
+        Some(0) => Ok(()),
+        Some(1) => {
+            let path = format_path_for_display(&path);
+            let dir = first.as_os_str().to_string_lossy();
+            bail!(cformat!(
+                "worktree-path template resolves inside the repository, at <bold>{path}</>; point worktree-path outside the repository or add <bold>{dir}/</> to .gitignore"
+            ))
+        }
+        _ => Err(worktrunk::git::CommandError::from_failed_output("git", &args, &output).into()),
+    }
 }
 
 /// Refuse a `--path` directory that holds a worktree or the repository, that
