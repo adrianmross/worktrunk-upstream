@@ -234,7 +234,7 @@ fn ancestor_from_name(name: &str) -> Option<AncestorShell> {
 /// `/proc/<pid>/stat` is `pid (comm) state ppid …`; comm may itself contain
 /// spaces or parens, so parse from the last `)`.
 #[cfg(target_os = "linux")]
-fn process_name_and_ppid(pid: u32) -> Option<(String, u32)> {
+pub(crate) fn process_name_and_ppid(pid: u32) -> Option<(String, u32)> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let open = stat.find('(')?;
     let close = stat.rfind(')')?;
@@ -259,7 +259,7 @@ fn process_name_and_ppid(pid: u32) -> Option<(String, u32)> {
 /// classifier needs. One snapshot (a few ms, cold warning paths only) serves
 /// the whole walk.
 #[cfg(target_os = "macos")]
-fn process_name_and_ppid(pid: u32) -> Option<(String, u32)> {
+pub(crate) fn process_name_and_ppid(pid: u32) -> Option<(String, u32)> {
     static TABLE: std::sync::OnceLock<std::collections::HashMap<u32, (String, u32)>> =
         std::sync::OnceLock::new();
     TABLE.get_or_init(ps_snapshot).get(&pid).cloned()
@@ -290,7 +290,7 @@ fn ps_snapshot() -> std::collections::HashMap<u32, (String, u32)> {
 }
 
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
-fn process_name_and_ppid(_pid: u32) -> Option<(String, u32)> {
+pub(crate) fn process_name_and_ppid(_pid: u32) -> Option<(String, u32)> {
     None
 }
 

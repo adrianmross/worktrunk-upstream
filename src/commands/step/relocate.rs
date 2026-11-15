@@ -38,7 +38,7 @@ pub fn step_relocate(
     use super::super::relocate::{
         GatherResult, RelocatedEntry, RelocationExecutor, ValidationResult, gather_candidates,
         show_all_skipped, show_dry_run_preview, show_no_relocations_needed, show_summary,
-        validate_candidates,
+        skip_busy, validate_candidates,
     };
 
     let json_mode = format == crate::cli::SwitchFormat::Json;
@@ -81,7 +81,7 @@ pub fn step_relocate(
         template_error_branches,
     } = gather_candidates(&repo, &config, &branches)?;
 
-    let template_skips: Vec<super::super::relocate::SkippedEntry> = template_error_branches
+    let mut template_skips: Vec<super::super::relocate::SkippedEntry> = template_error_branches
         .iter()
         .map(|b| super::super::relocate::SkippedEntry {
             branch: b.clone(),
@@ -95,6 +95,19 @@ pub fn step_relocate(
         } else {
             show_no_relocations_needed(template_error_branches.len());
         }
+        return Ok(());
+    }
+
+    // Moving a worktree out from under running processes breaks them.
+    // Busy skips fold into `template_skips` so every count and JSON list
+    // below includes them.
+    let (candidates, busy_skips) = skip_busy(&repo, candidates)?;
+    template_skips.extend(busy_skips);
+    if candidates.is_empty() {
+        if json_mode {
+            return print_relocations(&[], &template_skips, &[], dry_run);
+        }
+        show_all_skipped(template_skips.len());
         return Ok(());
     }
 

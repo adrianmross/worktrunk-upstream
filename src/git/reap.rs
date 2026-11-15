@@ -187,12 +187,8 @@ pub fn processes_under(worktree_path: &Path) -> Vec<CwdProcess> {
         dunce::canonicalize(worktree_path).unwrap_or_else(|_| worktree_path.to_path_buf());
     let self_pid = std::process::id();
 
-    #[cfg(target_os = "linux")]
-    let processes = processes_from_proc(Path::new("/proc"));
-    #[cfg(not(target_os = "linux"))]
-    let processes = processes_from_lsof();
-
-    let mut candidates: Vec<CwdProcess> = processes
+    let mut candidates: Vec<CwdProcess> = cwd_processes()
+        .unwrap_or_default()
         .into_iter()
         .filter(|p| p.pid != self_pid)
         .filter(|p| p.cwd.starts_with(&canonical))
@@ -201,12 +197,39 @@ pub fn processes_under(worktree_path: &Path) -> Vec<CwdProcess> {
     candidates
 }
 
+/// Every visible process with its cwd, from one platform probe (`/proc` on
+/// Linux, one `lsof` elsewhere). `None` when the probe itself is unavailable
+/// (`lsof` missing or timed out), as opposed to finding no processes.
+pub fn cwd_processes() -> Option<Vec<CwdProcess>> {
+    #[cfg(target_os = "linux")]
+    {
+        processes_from_proc(Path::new("/proc"))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        processes_from_lsof()
+    }
+}
+
+/// This process and its ancestors, which stand wherever the user invoked `wt`
+/// (an interactive shell, a parent `wt` running an alias). Bounded like the
+/// shell-ancestry walk; an unreadable hop ends it.
+pub fn self_and_ancestors() -> HashSet<u32> {
+    let mut pid = std::process::id();
+    let mut pids = HashSet::from([pid]);
+    while let Some((_, ppid)) = crate::shell::process_name_and_ppid(pid) {
+        if ppid <= 1 || pids.len() >= 32 || !pids.insert(ppid) {
+            break;
+        }
+        pid = ppid;
+    }
+    pids
+}
+
 #[cfg(target_os = "linux")]
-fn processes_from_proc(proc_root: &Path) -> Vec<CwdProcess> {
-    let Ok(entries) = std::fs::read_dir(proc_root) else {
-        return Vec::new();
-    };
-    entries
+fn processes_from_proc(proc_root: &Path) -> Option<Vec<CwdProcess>> {
+    let entries = std::fs::read_dir(proc_root).ok()?;
+    let processes = entries
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let pid = entry.file_name().to_str()?.parse::<u32>().ok()?;
@@ -217,24 +240,26 @@ fn processes_from_proc(proc_root: &Path) -> Vec<CwdProcess> {
                 .to_owned();
             Some(CwdProcess { pid, command, cwd })
         })
-        .collect()
+        .collect();
+    Some(processes)
 }
 
 #[cfg(not(target_os = "linux"))]
-fn processes_from_lsof() -> Vec<CwdProcess> {
+fn processes_from_lsof() -> Option<Vec<CwdProcess>> {
     // `lsof -d cwd` lists every visible process's cwd. It exits non-zero when
     // some processes are inaccessible (other users), but still prints the
     // accessible ones — so parse whatever stdout we got rather than gating on
-    // exit status. Only a spawn failure (lsof missing) means "no data".
-    let Ok(output) = Cmd::new("lsof")
+    // exit status. Only a spawn failure (lsof missing) means "no data". Run
+    // from `/` so `lsof` doesn't report itself inside the worktree `wt` was
+    // run from.
+    let output = Cmd::new("lsof")
         .args(["-d", "cwd", "-F", "pcn"])
+        .current_dir("/")
         .timeout(probe_timeout())
         .run()
-    else {
-        return Vec::new();
-    };
+        .ok()?;
 
-    parse_lsof_cwd(&String::from_utf8_lossy(&output.stdout))
+    Some(parse_lsof_cwd(&String::from_utf8_lossy(&output.stdout)))
 }
 
 /// Discover the processes eligible for reaping under `worktree_path`.
@@ -291,7 +316,7 @@ mod tests {
     #[test]
     fn missing_procfs_yields_no_processes() {
         let root = crate::testing::tempdir().unwrap();
-        assert!(processes_from_proc(&root.path().join("absent")).is_empty());
+        assert!(processes_from_proc(&root.path().join("absent")).is_none());
     }
 
     #[test]

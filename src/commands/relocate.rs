@@ -294,6 +294,98 @@ pub fn gather_candidates(
     })
 }
 
+/// Leave in place candidates that running processes stand in.
+///
+/// Renaming a directory out from under a dev server, agent, or shell succeeds
+/// on Unix but breaks the process, so a worktree holding any process's cwd is
+/// skipped. One process snapshot serves the whole run. Each process belongs to
+/// the innermost worktree containing its cwd, so one in a worktree nested under
+/// the main one doesn't pin the main. This process and its ancestors (the
+/// invoking shell) are excluded: the shell follows its worktree to the new
+/// path. Without a snapshot (no `lsof`), warn and move as before.
+#[cfg(unix)]
+pub fn skip_busy(
+    repo: &Repository,
+    candidates: Vec<RelocationCandidate>,
+) -> anyhow::Result<(Vec<RelocationCandidate>, Vec<SkippedEntry>)> {
+    use worktrunk::git::reap;
+
+    let ours = reap::self_and_ancestors();
+    let Some(mut processes) = reap::cwd_processes() else {
+        eprintln!(
+            "{}",
+            warning_message("Cannot list running processes; relocating without checking for them")
+        );
+        return Ok((candidates, Vec::new()));
+    };
+    processes.retain(|p| !ours.contains(&p.pid));
+    processes.sort_by_key(|p| p.pid);
+
+    let canonical = |path: &Path| dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let roots: Vec<PathBuf> = repo
+        .list_worktrees()?
+        .iter()
+        .map(|wt| canonical(&wt.path))
+        .collect();
+    let mut by_root: HashMap<&Path, Vec<&reap::CwdProcess>> = HashMap::new();
+    for p in &processes {
+        if let Some(root) = roots
+            .iter()
+            .filter(|root| p.cwd.starts_with(root))
+            .max_by_key(|root| root.components().count())
+        {
+            by_root.entry(root.as_path()).or_default().push(p);
+        }
+    }
+
+    let mut kept = Vec::new();
+    let mut skipped = Vec::new();
+    for candidate in candidates {
+        let Some(procs) = by_root.get(canonical(&candidate.wt.path).as_path()) else {
+            kept.push(candidate);
+            continue;
+        };
+        let branch = candidate.branch();
+        let count = procs.len();
+        let noun = reap::process_noun(count);
+        let mut examples: Vec<String> = procs
+            .iter()
+            .take(2)
+            .map(|p| format!("{} {}", p.pid, p.command))
+            .collect();
+        if count > 2 {
+            examples.push("…".into());
+        }
+        let examples = examples.join(", ");
+        eprintln!(
+            "{}",
+            warning_message(cformat!(
+                "Skipping <bold>{branch}</> ({count} running {noun} inside: {examples})"
+            ))
+        );
+        eprintln!(
+            "{}",
+            hint_message(cformat!(
+                "To move it, stop them and rerun <underline>wt step relocate</>"
+            ))
+        );
+        skipped.push(SkippedEntry {
+            branch: branch.to_string(),
+            reason: "busy",
+        });
+    }
+    Ok((kept, skipped))
+}
+
+/// No cheap per-process cwd here; move as before.
+#[cfg(not(unix))]
+pub fn skip_busy(
+    _repo: &Repository,
+    candidates: Vec<RelocationCandidate>,
+) -> anyhow::Result<(Vec<RelocationCandidate>, Vec<SkippedEntry>)> {
+    Ok((candidates, Vec::new()))
+}
+
 // ============================================================================
 // Phase 2: Validate candidates
 // ============================================================================
