@@ -710,6 +710,14 @@ After moving a repository or its parent directory with `mv`, run
 `wt step relocate` inside it. It reconnects Git's links to worktrees that
 moved along, then moves the rest to their expected paths.
 
+To relocate every repository in a moved directory in one call, pass their
+paths with `--repo`:
+
+```console
+$ mv ~/code/org ~/code/new-org
+$ wt step relocate --repo ~/code/new-org/*
+```
+
 Each moved worktree runs its `post-switch` hooks at the new path.
 
 ## Swap handling
@@ -748,6 +756,13 @@ refuses), unless `--commit` is passed.
         /// Worktrees to relocate (defaults to all mismatched)
         #[arg(add = crate::completion::worktree_only_completer(), value_parser = crate::cli::non_empty_branch)]
         branches: Vec<String>,
+
+        /// Repositories to relocate, by primary checkout path
+        ///
+        /// Paths that aren't a repository's primary checkout are skipped, so a
+        /// glob over a directory of repositories works.
+        #[arg(long = "repo", value_name = "PATH", num_args = 1.., conflicts_with = "branches")]
+        repos: Vec<std::path::PathBuf>,
 
         /// Show what would be moved
         #[arg(long)]

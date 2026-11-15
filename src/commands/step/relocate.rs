@@ -2,15 +2,21 @@
 //!
 //! See `src/commands/relocate.rs` for the implementation details and algorithm.
 
+use std::collections::HashSet;
+use std::path::PathBuf;
+
 use anyhow::Context;
 use color_print::cformat;
 
 use worktrunk::config::UserConfig;
-use worktrunk::git::Repository;
+use worktrunk::git::{ErrorExt, Repository, WorktrunkError, resolve_input_path};
+use worktrunk::path::{format_path_for_display, paths_match};
 
 use crate::output::print_json;
 use worktrunk::HookType;
-use worktrunk::styling::{eprintln, info_message};
+use worktrunk::styling::{
+    eprintln, error_message, format_with_gutter, info_message, progress_message,
+};
 
 use super::super::command_executor::CommandContext;
 use super::super::hook_plan::{ApprovedHookPlan, HookPlanBuilder, register_planned};
@@ -30,6 +36,73 @@ use super::super::hooks::HookAnnouncer;
 /// | `[branches...]` | Specific branches to relocate (default: all mismatched) |
 pub fn step_relocate(
     branches: Vec<String>,
+    repos: Vec<PathBuf>,
+    dry_run: bool,
+    commit: bool,
+    clobber: bool,
+    format: crate::cli::SwitchFormat,
+) -> anyhow::Result<()> {
+    if repos.is_empty() {
+        return relocate_repo(
+            worktrunk::git::base_path().clone(),
+            &branches,
+            dry_run,
+            commit,
+            clobber,
+            format,
+        );
+    }
+    // One JSON document per repository wouldn't parse as a single value.
+    if format == crate::cli::SwitchFormat::Json {
+        anyhow::bail!(cformat!(
+            "<bold>--format=json</> is not supported with <bold>--repo</>"
+        ));
+    }
+    let mut seen = HashSet::new();
+    let mut failed = false;
+    for path in repos.iter().map(resolve_input_path) {
+        let display = format_path_for_display(&path);
+        let repo = match Repository::at(path.clone()) {
+            Ok(repo) if repo.repo_path().is_ok_and(|root| paths_match(root, &path)) => repo,
+            _ => {
+                eprintln!(
+                    "{}",
+                    info_message(cformat!(
+                        "Skipping <bold>{display}</> (not a repository's primary checkout)"
+                    ))
+                );
+                continue;
+            }
+        };
+        if !seen.insert(repo.git_common_dir().to_path_buf()) {
+            continue;
+        }
+        eprintln!(
+            "{}",
+            progress_message(cformat!("Relocating in <bold>{display}</>..."))
+        );
+        if let Err(err) = relocate_repo(path, &branches, dry_run, commit, clobber, format) {
+            if err.interrupt_signal().is_some() {
+                return Err(err);
+            }
+            let detail = err
+                .render_diagnostic()
+                .unwrap_or_else(|| err.display_message());
+            eprintln!("{}", error_message(format!("Failed in {display}")));
+            eprintln!("{}", format_with_gutter(&detail, None));
+            failed = true;
+        }
+    }
+    if failed {
+        return Err(WorktrunkError::AlreadyDisplayed { exit_code: 1 }.into());
+    }
+    Ok(())
+}
+
+/// Relocate the worktrees of the repository discovered from `discovery_path`.
+fn relocate_repo(
+    discovery_path: PathBuf,
+    branches: &[String],
     dry_run: bool,
     commit: bool,
     clobber: bool,
@@ -43,7 +116,7 @@ pub fn step_relocate(
 
     let json_mode = format == crate::cli::SwitchFormat::Json;
 
-    let repo = Repository::current()?;
+    let repo = Repository::at(discovery_path.clone())?;
     let config = UserConfig::load().context("Failed to load config")?;
 
     // Reconnect anything moved with plain `mv` first; otherwise git lists it
@@ -63,7 +136,7 @@ pub fn step_relocate(
         repo
     } else {
         super::super::relocate::repair_worktree_links(&repo, &moved)?;
-        Repository::current()?
+        Repository::at(discovery_path)?
     };
     let default_branch = repo.default_branch().unwrap_or_default();
 
@@ -79,7 +152,7 @@ pub fn step_relocate(
     let GatherResult {
         candidates,
         template_error_branches,
-    } = gather_candidates(&repo, &config, &branches)?;
+    } = gather_candidates(&repo, &config, branches)?;
 
     let mut template_skips: Vec<super::super::relocate::SkippedEntry> = template_error_branches
         .iter()

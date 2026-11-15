@@ -909,6 +909,14 @@ After moving a repository or its parent directory with `mv`, run
 `wt step relocate` inside it. It reconnects Git's links to worktrees that
 moved along, then moves the rest to their expected paths.
 
+To relocate every repository in a moved directory in one call, pass their
+paths with `--repo`:
+
+```console
+$ mv ~/code/org ~/code/new-org
+$ wt step relocate --repo ~/code/new-org/*
+```
+
 Each moved worktree runs its `post-switch` hooks at the new path.
 
 ### Swap handling
@@ -957,6 +965,12 @@ Arguments:
           Worktrees to relocate (defaults to all mismatched)
 
 Options:
+      --repo <PATH>...
+          Repositories to relocate, by primary checkout path
+
+          Paths that aren't a repository's primary checkout are skipped, so a glob over a directory
+          of repositories works.
+
       --dry-run
           Show what would be moved
 
