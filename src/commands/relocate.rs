@@ -150,6 +150,54 @@ impl RelocationExecutor<'_> {
 /// Find worktrees that are not at their expected paths.
 ///
 /// Returns candidates for relocation plus a count of template errors encountered.
+/// Linked worktrees git lists as prunable whose checkout sits at its expected
+/// path: moved by hand, typically with a parent directory that also held the
+/// main worktree (`mv ~/code/org ~/code/new-org`).
+pub fn stale_moved_worktrees(
+    repo: &Repository,
+    config: &UserConfig,
+) -> anyhow::Result<Vec<PathBuf>> {
+    Ok(repo
+        .list_worktrees()?
+        .iter()
+        .filter(|wt| wt.prunable.is_some())
+        .filter_map(|wt| compute_worktree_path(repo, wt.branch.as_deref()?, config).ok())
+        .filter(|expected| expected.join(".git").is_file())
+        .collect())
+}
+
+/// Reconnect worktrees moved with plain `mv` before planning any move.
+///
+/// Run from the main worktree, `git worktree repair` re-points every linked
+/// worktree's `.git` file after the main worktree moved; given the new paths of
+/// moved linked worktrees (`moved`, plus the invoking worktree), it re-points
+/// the main's records too. Failure only warns: the relocation that follows
+/// skips what is still disconnected.
+pub fn repair_worktree_links(repo: &Repository, moved: &[PathBuf]) -> anyhow::Result<()> {
+    let current = repo.current_worktree().root().ok();
+    let paths: Vec<String> = moved
+        .iter()
+        .chain(&current)
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    let mut args = vec!["worktree", "repair"];
+    args.extend(paths.iter().map(String::as_str));
+    if let Err(err) = repo.worktree_at(repo.repo_path()?).run_command(&args) {
+        eprintln!(
+            "{}",
+            warning_message(format!("Failed to repair worktree links: {err:#}"))
+        );
+    } else if !moved.is_empty() {
+        let n = moved.len();
+        let noun = if n == 1 { "worktree" } else { "worktrees" };
+        eprintln!(
+            "{}",
+            success_message(format!("Reconnected {n} moved {noun}"))
+        );
+    }
+    Ok(())
+}
+
 pub fn gather_candidates(
     repo: &Repository,
     config: &UserConfig,
@@ -689,11 +737,8 @@ impl<'a> RelocationExecutor<'a> {
         if is_main {
             self.move_main_worktree(idx, default_branch)?;
         } else {
-            let src = src_path.to_string_lossy();
-            let dest = dest_path.to_string_lossy();
-            self.repo
-                .worktree_at(self.repo.repo_path()?)
-                .run_command(&["worktree", "move", &src, &dest])
+            create_parent_dir(&dest_path)?;
+            move_linked_worktree(self.repo, &src_path, &dest_path)
                 .context("Failed to move worktree")?;
         }
 
@@ -773,11 +818,7 @@ impl<'a> RelocationExecutor<'a> {
         let msg = cformat!("Moving <bold>{branch}</> to temporary location...");
         eprintln!("{}", progress_message(msg));
 
-        let src = candidate.wt.path.to_string_lossy();
-        let dest = temp_path.to_string_lossy();
-        self.repo
-            .worktree_at(self.repo.repo_path()?)
-            .run_command(&["worktree", "move", &src, &dest])
+        move_linked_worktree(self.repo, &candidate.wt.path, &temp_path)
             .context("Failed to move worktree to temp")?;
 
         // Update current_locations to reflect the move
@@ -810,11 +851,8 @@ impl<'a> RelocationExecutor<'a> {
             let src_display = format_path_for_display(&temp.original_path);
             let dest_display = format_path_for_display(&candidate.expected_path);
 
-            let src = temp.temp_path.to_string_lossy();
-            let dest = candidate.expected_path.to_string_lossy();
-            self.repo
-                .worktree_at(self.repo.repo_path()?)
-                .run_command(&["worktree", "move", &src, &dest])
+            create_parent_dir(&candidate.expected_path)?;
+            move_linked_worktree(self.repo, &temp.temp_path, &candidate.expected_path)
                 .context("Failed to move worktree from temp to final location")?;
 
             let msg = cformat!("Relocated <bold>{branch}</>: {src_display} → {dest_display}");
@@ -835,6 +873,119 @@ impl<'a> RelocationExecutor<'a> {
 
         Ok(())
     }
+}
+
+/// `git worktree move` doesn't create the destination's parent, so a template
+/// pointing at a new directory (`~/code/<org>/worktrees/...`) would fail.
+fn create_parent_dir(dest: &Path) -> anyhow::Result<()> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", format_path_for_display(parent)))?;
+    }
+    Ok(())
+}
+
+/// Move a linked worktree, including one with submodules.
+///
+/// `git worktree move` refuses a worktree with submodule checkouts: each holds
+/// relative links (its `.git` file, and `core.worktree` in its module git dir
+/// under `.git/worktrees/<id>/modules/`) that a rename breaks. For those, rename
+/// the directory, let `git worktree repair` reconnect the worktree, and rewrite
+/// both submodule links relative to the new location, as Git writes them.
+fn move_linked_worktree(repo: &Repository, src: &Path, dest: &Path) -> anyhow::Result<()> {
+    let main = repo.worktree_at(repo.repo_path()?);
+    let submodules = submodule_checkouts(repo, src)?;
+    if submodules.is_empty() {
+        main.run_command(&[
+            "worktree",
+            "move",
+            &src.to_string_lossy(),
+            &dest.to_string_lossy(),
+        ])?;
+        return Ok(());
+    }
+    std::fs::rename(src, dest).with_context(|| {
+        format!(
+            "Failed to rename {} to {}",
+            format_path_for_display(src),
+            format_path_for_display(dest)
+        )
+    })?;
+    main.run_command(&["worktree", "repair", &dest.to_string_lossy()])?;
+    for (module_dir, rel) in submodules {
+        let checkout = dest.join(rel);
+        let gitdir = pathdiff::diff_paths(&module_dir, &checkout).unwrap_or(module_dir.clone());
+        worktrunk::utils::write_atomically(
+            &checkout.join(".git"),
+            &format!("gitdir: {}\n", gitdir.display()),
+        )
+        .with_context(|| format!("Failed to update {}", format_path_for_display(&checkout)))?;
+        let worktree = pathdiff::diff_paths(&checkout, &module_dir).unwrap_or(checkout);
+        let config = module_dir.join("config");
+        repo.run_command(&[
+            "config",
+            "--file",
+            &config.to_string_lossy(),
+            "core.worktree",
+            &worktree.to_string_lossy(),
+        ])?;
+    }
+    Ok(())
+}
+
+/// A linked worktree's submodule checkouts: each module git dir (nested ones
+/// included) paired with its checkout's path relative to the worktree. Read
+/// before a move, while the relative links still resolve.
+fn submodule_checkouts(repo: &Repository, wt: &Path) -> anyhow::Result<Vec<(PathBuf, PathBuf)>> {
+    let git_dir = repo
+        .worktree_at(wt)
+        .run_command(&["rev-parse", "--absolute-git-dir"])?;
+    let mut found = Vec::new();
+    let modules = PathBuf::from(git_dir.trim()).join("modules");
+    if modules.is_dir() {
+        collect_module_dirs(&modules, &mut found)?;
+    }
+    let root = dunce::canonicalize(wt)?;
+    let mut checkouts = Vec::new();
+    for module_dir in found {
+        let config = module_dir.join("config");
+        let Ok(worktree) = repo.run_command(&[
+            "config",
+            "--file",
+            &config.to_string_lossy(),
+            "core.worktree",
+        ]) else {
+            continue;
+        };
+        let Ok(checkout) = dunce::canonicalize(module_dir.join(worktree.trim())) else {
+            continue; // Not checked out
+        };
+        if let Ok(rel) = checkout.strip_prefix(&root) {
+            checkouts.push((module_dir, rel.to_path_buf()));
+        }
+    }
+    Ok(checkouts)
+}
+
+/// Module git dirs under `dir`. A submodule's name may contain `/`, so its git
+/// dir can sit several levels down; one with its own submodules nests them
+/// under its `modules/`.
+fn collect_module_dirs(dir: &Path, found: &mut Vec<PathBuf>) -> anyhow::Result<()> {
+    if dir.join("HEAD").is_file() && dir.join("config").is_file() {
+        found.push(dir.to_path_buf());
+        let nested = dir.join("modules");
+        if nested.is_dir() {
+            collect_module_dirs(&nested, found)?;
+        }
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_module_dirs(&path, found)?;
+        }
+    }
+    Ok(())
 }
 
 /// Send the shell to the worktree's new path if it stood in the worktree that

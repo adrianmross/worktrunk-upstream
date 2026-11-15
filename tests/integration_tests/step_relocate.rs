@@ -1896,3 +1896,172 @@ fn test_relocate_main_leaves_shell_in_nested_worktree(repo: TestRepo) {
         "the shell in `other` should stay put, not follow `feature`"
     );
 }
+
+/// A template pointing at a directory that doesn't exist yet (grouping trees
+/// under `<parent>/worktrees/`) relocates into it instead of failing the move.
+#[rstest]
+fn test_relocate_creates_missing_parent_dir(repo: TestRepo) {
+    let parent = worktree_parent(&repo);
+    let wrong_path = parent.join("wrong-location");
+    repo.run_git(&[
+        "worktree",
+        "add",
+        "-b",
+        "feature",
+        wrong_path.to_str().unwrap(),
+    ]);
+    fs::write(
+        repo.test_config_path(),
+        "worktree-path = \"../worktrees/{{ repo }}.{{ branch }}\"\n",
+    )
+    .unwrap();
+    let grouped = parent.join("worktrees");
+    assert!(!grouped.exists());
+
+    let output = repo
+        .wt_command()
+        .args(["step", "relocate", "feature"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(grouped.join("repo.feature").exists());
+    assert!(!wrong_path.exists());
+}
+
+/// A worktree moved with plain `mv` to its expected path is prunable to git;
+/// relocate reconnects it instead of leaving it for `wt step prune` to drop.
+#[rstest]
+fn test_relocate_reconnects_worktree_moved_by_hand(repo: TestRepo) {
+    let parent = worktree_parent(&repo);
+    let wrong_path = parent.join("wrong-location");
+    repo.run_git(&[
+        "worktree",
+        "add",
+        "-b",
+        "feature",
+        wrong_path.to_str().unwrap(),
+    ]);
+    let expected = parent.join("repo.feature");
+    fs::rename(&wrong_path, &expected).unwrap();
+    let list = repo.git_output(&["worktree", "list", "--porcelain"]);
+    assert!(list.contains("prunable"), "{list}");
+
+    let output = repo
+        .wt_command()
+        .args(["step", "relocate"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let list = repo.git_output(&["worktree", "list", "--porcelain"]);
+    assert!(!list.contains("prunable"), "{list}");
+    let expected = dunce::canonicalize(&expected).unwrap();
+    assert!(
+        list.contains(&expected.to_slash_lossy().to_string()),
+        "{list}"
+    );
+}
+
+/// A relocated worktree reruns post-switch at its new path, so per-path setup
+/// (a dev-shell cache) follows the move.
+#[rstest]
+fn test_relocate_runs_post_switch_at_new_path(repo: TestRepo) {
+    let parent = worktree_parent(&repo);
+    let wrong_path = parent.join("wrong-location");
+    repo.run_git(&[
+        "worktree",
+        "add",
+        "-b",
+        "feature",
+        wrong_path.to_str().unwrap(),
+    ]);
+    let marker = parent.join("post-switch-ran");
+    fs::write(
+        repo.test_config_path(),
+        format!(
+            "[post-switch]\nmark = \"printf '%s' '{{{{ worktree_path }}}}' > '{}'\"\n",
+            marker.to_slash_lossy()
+        ),
+    )
+    .unwrap();
+
+    let output = repo
+        .wt_command()
+        .args(["step", "relocate", "feature"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    worktrunk::testing::wait_for_file_content(&marker);
+    let ran_at = fs::read_to_string(&marker).unwrap();
+    assert!(ran_at.ends_with("repo.feature"), "{ran_at}");
+}
+
+/// `git worktree move` refuses worktrees with submodules; relocate moves them
+/// and keeps each submodule checkout connected.
+#[rstest]
+fn test_relocate_moves_worktree_with_submodule(repo: TestRepo) {
+    let parent = worktree_parent(&repo);
+    let lib = parent.join("lib");
+    fs::create_dir_all(&lib).unwrap();
+    repo.run_git_in(&lib, &["init", "-q", "-b", "main"]);
+    repo.run_git_in(&lib, &["commit", "-q", "--allow-empty", "-m", "lib"]);
+    let lib_url = lib.to_slash_lossy().to_string();
+    repo.run_git(&[
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "-q",
+        &lib_url,
+        "vendor/lib",
+    ]);
+    repo.run_git(&["commit", "-q", "-m", "Add submodule"]);
+    let wrong_path = parent.join("wrong-location");
+    repo.run_git(&[
+        "worktree",
+        "add",
+        "-b",
+        "feature",
+        wrong_path.to_str().unwrap(),
+    ]);
+    repo.run_git_in(
+        &wrong_path,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "update",
+            "-q",
+            "--init",
+        ],
+    );
+
+    let output = repo
+        .wt_command()
+        .args(["step", "relocate", "feature"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let moved = parent.join("repo.feature");
+    assert!(!wrong_path.exists());
+    // Panics if the submodule's links still point at the old checkout.
+    repo.run_git_in(&moved.join("vendor/lib"), &["status", "--short"]);
+    repo.run_git_in(&moved, &["submodule", "status"]);
+    let list = repo.git_output(&["worktree", "list", "--porcelain"]);
+    assert!(!list.contains("prunable"), "{list}");
+}
