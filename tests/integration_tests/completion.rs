@@ -843,6 +843,7 @@ fn test_complete_step_subcommands(repo: TestRepo) {
         "Missing copy-ignored"
     );
     assert!(subcommands.contains(&"diff"), "Missing diff");
+    assert!(subcommands.contains(&"doctor"), "Missing doctor");
     assert!(subcommands.contains(&"eval"), "Missing eval");
     assert!(subcommands.contains(&"for-each"), "Missing for-each");
     assert!(subcommands.contains(&"promote"), "Missing promote");
@@ -851,8 +852,8 @@ fn test_complete_step_subcommands(repo: TestRepo) {
     assert!(subcommands.contains(&"tether"), "Missing tether");
     assert_eq!(
         subcommands.len(),
-        12,
-        "Should have exactly 12 step subcommands"
+        13,
+        "Should have exactly 13 step subcommands"
     );
 }
 

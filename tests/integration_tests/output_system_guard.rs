@@ -65,6 +65,8 @@ const STDOUT_ALLOWED_PATHS: &[&str] = &[
     "commands/step/squash.rs",
     // wt step copy-ignored dry-run plan (human preview + --format=json)
     "commands/step/copy_ignored.rs",
+    // wt step doctor report (the findings are the answer)
+    "commands/step/doctor.rs",
     // wt step prune dry-run plan (human preview + --format=json)
     "commands/step/prune.rs",
     // wt step relocate dry-run human preview (show_dry_run_preview)
