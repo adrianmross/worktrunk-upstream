@@ -953,6 +953,7 @@ refuses), unless `--commit` is passed.
 - **Locked** — unlock with `git worktree unlock`
 - **Target blocked** (without `--clobber`) — use `--clobber` to backup blocker
 - **Detached HEAD** — no branch to compute expected path
+- **Running processes** (macOS, Linux) — a dev server, agent, or shell stands inside it; stop them and rerun `wt step relocate`
 
 ### Command reference
 
