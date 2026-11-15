@@ -59,6 +59,7 @@ pub mod statusline;
 pub mod step_alias;
 pub mod step_copy_ignored;
 pub mod step_diff;
+pub mod step_doctor;
 pub mod step_promote;
 pub mod step_prune;
 pub mod step_relocate;

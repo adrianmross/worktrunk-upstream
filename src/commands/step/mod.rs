@@ -9,6 +9,7 @@
 //!
 //! Standalone:
 //! - `copy_ignored::step_copy_ignored` - Copy gitignored files matching .worktreeinclude
+//! - `doctor::step_doctor` - Report worktree health problems
 //! - `promote::handle_promote` - Swap a branch into the main worktree
 //! - `prune::step_prune` - Remove worktrees merged into the default branch
 //! - `relocate::step_relocate` - Move worktrees to expected paths
@@ -18,6 +19,7 @@
 pub(crate) mod commit;
 pub(crate) mod copy_ignored;
 pub(crate) mod diff;
+pub(crate) mod doctor;
 pub(crate) mod promote;
 pub(crate) mod prune;
 pub(crate) mod rebase;
@@ -29,6 +31,7 @@ pub(crate) mod tether;
 pub(crate) use commit::step_commit;
 pub(crate) use copy_ignored::step_copy_ignored;
 pub(crate) use diff::step_diff;
+pub(crate) use doctor::step_doctor;
 pub(crate) use promote::{PromoteResult, handle_promote};
 pub(crate) use prune::step_prune;
 pub(crate) use rebase::{RebaseResult, handle_rebase};
