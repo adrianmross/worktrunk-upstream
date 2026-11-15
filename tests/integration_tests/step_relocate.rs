@@ -2124,6 +2124,7 @@ fn test_relocate_skips_worktree_with_running_process(repo: TestRepo) {
     let stderr = relocate(&[]);
     assert!(!stderr.contains("Skipping"), "{stderr}");
     assert!(expected.exists() && !wrong_path.exists(), "{stderr}");
+}
 
 /// A second repository beside `repo`, with `feature` at a mismatched path.
 fn sibling_repo(repo: &TestRepo, name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
