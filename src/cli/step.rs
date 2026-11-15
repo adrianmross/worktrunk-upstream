@@ -675,6 +675,42 @@ $ wt step prune
         format: crate::cli::SwitchFormat,
     },
 
+    /// \[experimental\] Report worktree health problems
+    ///
+    /// Lists stale entries, broken worktrees, stray directories, and coding-agent worktrees outside the `worktree-path` layout.
+    #[command(after_long_help = r#"## Examples
+
+Report problems in the current repository:
+
+```console
+$ wt step doctor
+```
+
+Report, then clear stale entries:
+
+```console
+$ wt step doctor --fix
+```
+
+## Checks
+
+- **Stale entry** — git lists the worktree as prunable, usually because its directory was deleted or moved; shows git's reason
+- **Broken worktree** — git can't read the worktree's `HEAD` commit, as with a broken `objects/info/alternates` or `.git` file
+- **Stray directory** — a directory named like this repository's worktrees, beside them, that no worktree is registered at
+- **Agent worktree** — a worktree under `.claude/worktrees/` or `.codex/`, or a leftover directory in `.claude/worktrees/`
+
+Registered agent worktrees move to their `worktree-path` location with `wt step relocate`; `wt config plugins claude install` has Claude Code create new ones there.
+
+## Fixing
+
+The report changes nothing. `--fix` also runs `git worktree prune`, which clears stale entries only. Stray and leftover directories are left for you to inspect and remove.
+"#)]
+    Doctor {
+        /// Clear stale entries with `git worktree prune`
+        #[arg(long)]
+        fix: bool,
+    },
+
     /// \[experimental\] Move worktrees to expected paths
     ///
     /// Relocates worktrees whose path doesn't match the `worktree-path` template.
