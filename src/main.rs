@@ -378,11 +378,12 @@ fn handle_step_command(
         } => step_prune(dry_run, yes, &min_age, foreground, format),
         StepCommand::Relocate {
             branches,
+            repos,
             dry_run,
             commit,
             clobber,
             format,
-        } => step_relocate(branches, dry_run, commit, clobber, format),
+        } => step_relocate(branches, repos, dry_run, commit, clobber, format),
         StepCommand::Tether { command } => step_tether(&command, working_dir.as_deref()),
         StepCommand::External(args) => commands::step_alias(args, yes),
     }
