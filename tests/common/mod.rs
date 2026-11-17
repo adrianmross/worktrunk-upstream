@@ -677,9 +677,25 @@ pub fn configure_pty_command(cmd: &mut portable_pty::CommandBuilder) {
 #[cfg(unix)]
 pub fn setup_minimal_path_with_git(bin_dir: &Path) -> String {
     std::fs::create_dir_all(bin_dir).unwrap();
-    let git = which::which("git").expect("git must be installed to run tests");
-    std::os::unix::fs::symlink(git, bin_dir.join("git")).unwrap();
+    let link = bin_dir.join("git");
+    if !link.exists() {
+        let git = which::which("git").expect("git must be installed to run tests");
+        std::os::unix::fs::symlink(git, link).unwrap();
+    }
     format!("{}:/usr/bin:/bin", bin_dir.display())
+}
+
+/// Give `cmd` a PATH with only Git and the system directories, so a command
+/// that scans PATH for `wt` binaries (`wt step doctor`) can't see the host's.
+/// `WORKTRUNK_BIN` is already scrubbed with the other `WORKTRUNK_*` vars.
+pub fn hide_host_wt(cmd: &mut std::process::Command, repo: &TestRepo) {
+    #[cfg(unix)]
+    cmd.env(
+        "PATH",
+        setup_minimal_path_with_git(&repo.home_path().join("git-only-bin")),
+    );
+    #[cfg(not(unix))]
+    let _ = (cmd, repo);
 }
 
 /// Pass through LLVM coverage profiling environment to a portable_pty::CommandBuilder.
