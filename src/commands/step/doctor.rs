@@ -1,6 +1,6 @@
 //! `wt step doctor` — report worktree health problems for the current repository.
 //!
-//! Five read-only checks, printed to stdout as one report:
+//! Six read-only checks, printed to stdout as one report:
 //!
 //! - stale entries: registrations git lists as prunable
 //! - broken worktrees: live registrations where `git rev-parse` can't read `HEAD`
@@ -10,6 +10,8 @@
 //!   unregistered directories left in a worktree's `.claude/worktrees/`
 //! - wt binaries: the `wt` / `git-wt` executables on PATH and `WORKTRUNK_BIN`
 //!   report different `--version`s
+//! - agent branches: `agent-<hex id>` branches, from Claude Code's `Agent`
+//!   isolation, that no worktree has checked out, merged or not
 //!
 //! `--fix` runs only `git worktree prune`, which clears the stale entries and
 //! touches no directory or branch.
@@ -37,13 +39,17 @@ const PROBE_BRANCH: &str = "wt-doctor-probe";
 #[derive(serde::Serialize)]
 pub(crate) struct Finding {
     pub kind: FindingKind,
-    pub path: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    /// The branch, for agent branches left without a worktree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
     /// Git's reason or error, for stale entries and broken worktrees.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     /// The command that addresses this finding, when one exists.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fix: Option<&'static str>,
+    pub fix: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -55,12 +61,19 @@ pub(crate) enum FindingKind {
     AgentWorktree,
     AgentDirectory,
     WtBinaries,
+    MergedAgentBranch,
+    UnmergedAgentBranch,
 }
 
 impl Finding {
     /// The finding's headline, styled with `cformat!` tags.
     fn line(&self) -> String {
-        let path = format_path_for_display(&self.path);
+        let path = self
+            .path
+            .as_deref()
+            .map(format_path_for_display)
+            .unwrap_or_default();
+        let branch = self.branch.as_deref().unwrap_or_default();
         let detail = self.detail.as_deref().unwrap_or_default();
         match self.kind {
             FindingKind::StaleEntry => {
@@ -79,13 +92,19 @@ impl Finding {
             FindingKind::WtBinaries => cformat!(
                 "wt binaries report different versions; agents and hooks without <bold>WORKTRUNK_BIN</> run the first on PATH, <bold>{path}</>"
             ),
+            FindingKind::MergedAgentBranch => {
+                cformat!("Agent branch <bold>{branch}</> has no worktree; merged ({detail})")
+            }
+            FindingKind::UnmergedAgentBranch => {
+                cformat!("Agent branch <bold>{branch}</> has no worktree; {detail}")
+            }
         }
     }
 
     /// The headline as plain text, with the fix command when there is one.
     pub(crate) fn summary(&self) -> String {
         let line = anstream::adapter::strip_str(&self.line()).to_string();
-        match self.fix {
+        match &self.fix {
             Some(fix) => format!("{line}; run {fix}"),
             None => line,
         }
@@ -97,6 +116,20 @@ impl Finding {
             (FindingKind::BrokenWorktree | FindingKind::WtBinaries, Some(error)) => {
                 format!("{warning}\n{}", format_with_gutter(error, None))
             }
+            (FindingKind::MergedAgentBranch, _) => format!(
+                "{warning}\n{}",
+                hint_message(cformat!(
+                    "To delete the merged branch, run <underline>{}</>",
+                    self.fix.as_deref().unwrap_or_default()
+                ))
+            ),
+            (FindingKind::UnmergedAgentBranch, _) => format!(
+                "{warning}\n{}",
+                hint_message(cformat!(
+                    "To review the unmerged commits, run <underline>{}</>",
+                    self.fix.as_deref().unwrap_or_default()
+                ))
+            ),
             _ => warning.to_string(),
         }
     }
@@ -169,11 +202,12 @@ pub(crate) fn diagnose(repo: &Repository) -> anyhow::Result<Vec<Finding>> {
         .map(|wt| canonicalize_with_parents(&wt.path))
         .collect();
     let is_registered = |path: &Path| registered.contains(&canonicalize_with_parents(path));
-    let finding = |kind, path: &Path, detail, fix| Finding {
+    let finding = |kind, path: &Path, detail, fix: Option<&str>| Finding {
         kind,
-        path: path.to_path_buf(),
+        path: Some(path.to_path_buf()),
+        branch: None,
         detail,
-        fix,
+        fix: fix.map(str::to_string),
     };
 
     let mut findings = Vec::new();
@@ -253,6 +287,43 @@ pub(crate) fn diagnose(repo: &Repository) -> anyhow::Result<Vec<Finding>> {
         }
     }
 
+    // Branches Claude Code's `Agent` isolation leaves behind (`agent-<hex id>`)
+    // once their worktree is gone. Any registration, stale or not, counts as
+    // checked out.
+    if let Some(target) = repo.default_branch() {
+        let snapshot = repo.capture_refs()?;
+        for local in snapshot.local_branches() {
+            let name = &local.name;
+            let is_agent = name.strip_prefix("agent-").is_some_and(|id| {
+                id.len() >= 8 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            });
+            if !is_agent
+                || worktrees
+                    .iter()
+                    .any(|wt| wt.branch.as_deref() == Some(name.as_str()))
+            {
+                continue;
+            }
+            let (_, reason) = repo.integration_reason(&snapshot, name, &target)?;
+            findings.push(match reason {
+                Some(reason) => Finding {
+                    kind: FindingKind::MergedAgentBranch,
+                    path: None,
+                    branch: Some(name.clone()),
+                    detail: Some(format!("{} {target}", reason.description())),
+                    fix: Some(format!("wt remove {name}")),
+                },
+                None => Finding {
+                    kind: FindingKind::UnmergedAgentBranch,
+                    path: None,
+                    branch: Some(name.clone()),
+                    detail: Some(format!("not merged into {target}")),
+                    fix: Some(format!("git log {target}..{name}")),
+                },
+            });
+        }
+    }
+
     findings.extend(wt_binaries_finding());
     Ok(findings)
 }
@@ -296,7 +367,8 @@ fn wt_binaries_finding() -> Option<Finding> {
         .join("\n");
     Some(Finding {
         kind: FindingKind::WtBinaries,
-        path: versions[0].0.clone(),
+        path: Some(versions[0].0.clone()),
+        branch: None,
         detail: Some(detail),
         fix: None,
     })

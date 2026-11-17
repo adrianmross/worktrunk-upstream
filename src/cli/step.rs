@@ -705,6 +705,7 @@ $ wt step doctor --format=json
 - **Stray directory** — a directory named like this repository's worktrees, beside them, that no worktree is registered at
 - **Agent worktree** — a worktree under `.claude/worktrees/` or `.codex/`, or a leftover directory in `.claude/worktrees/`
 - **wt binaries** — the `wt` and `git-wt` executables on `PATH` and `WORKTRUNK_BIN` report different versions; agents and hooks without `WORKTRUNK_BIN` run the first on `PATH`
+- **Agent branch** — an `agent-<hex id>` branch, as Claude Code's `Agent` isolation names them, that no worktree has checked out; reported as merged into the default branch (delete with `wt remove <branch>`) or unmerged (review with `git log`)
 
 Registered agent worktrees move to their `worktree-path` location with `wt step relocate`; `wt config plugins claude install` has Claude Code create new ones there.
 
@@ -714,7 +715,7 @@ The report changes nothing. `--fix` also runs `git worktree prune`, which clears
 
 ## JSON output
 
-`--format=json` prints the findings as an array, empty when there are none. Each finding has a `kind` (`stale_entry`, `broken_worktree`, `stray_directory`, `agent_worktree`, `agent_directory`, `wt_binaries`) and a `path`, plus a `detail` (git's reason or error, or each binary's version) and a `fix` command when there is one.
+`--format=json` prints the findings as an array, empty when there are none. Each finding has a `kind` (`stale_entry`, `broken_worktree`, `stray_directory`, `agent_worktree`, `agent_directory`, `wt_binaries`, `merged_agent_branch`, `unmerged_agent_branch`) and a `path` or `branch`, plus a `detail` (git's reason or error, each binary's version, or how a branch is merged) and a `fix` command when there is one.
 "#)]
     Doctor {
         /// Clear stale entries with `git worktree prune`

@@ -107,3 +107,22 @@ fn test_doctor_wt_binaries(repo: TestRepo) {
     same.env("PATH", joined(&[&old, &alias]));
     assert_cmd_snapshot!("doctor_wt_binaries_same", same);
 }
+
+/// `agent-<hex id>` branches with no worktree are reported, merged with a
+/// `wt remove` hint and unmerged with a `git log` hint. A checked-out agent
+/// branch and a non-hex name are not.
+#[rstest]
+fn test_doctor_agent_branches(mut repo: TestRepo) {
+    repo.run_git(&["branch", "agent-0123abcd"]);
+    repo.run_git(&["branch", "agent-notahexid"]);
+    let unmerged = repo.add_worktree("agent-89abcdef01");
+    repo.commit_in_worktree(&unmerged, "work.txt", "work", "Agent work");
+    repo.run_git(&["worktree", "remove", "--force", unmerged.to_str().unwrap()]);
+    repo.add_worktree("agent-fedcba98");
+
+    assert_cmd_snapshot!(make_snapshot_cmd(&repo, "step", &["doctor"], None));
+    assert_cmd_snapshot!(
+        "doctor_agent_branches_json",
+        make_snapshot_cmd(&repo, "step", &["doctor", "--format=json"], None)
+    );
+}
