@@ -289,34 +289,38 @@ pub(crate) fn diagnose(repo: &Repository) -> anyhow::Result<Vec<Finding>> {
 
     // Branches Claude Code's `Agent` isolation leaves behind (`agent-<hex id>`)
     // once their worktree is gone. Any registration, stale or not, counts as
-    // checked out.
-    if let Some(target) = repo.default_branch() {
-        let snapshot = repo.capture_refs()?;
-        for local in snapshot.local_branches() {
-            let name = &local.name;
-            let is_agent = name.strip_prefix("agent-").is_some_and(|id| {
+    // checked out. The default branch resolves only when one is found, since
+    // an uncached lookup can query the remote.
+    let snapshot = repo.capture_refs()?;
+    let leftovers: Vec<&str> = snapshot
+        .local_branches()
+        .iter()
+        .map(|local| local.name.as_str())
+        .filter(|name| {
+            name.strip_prefix("agent-").is_some_and(|id| {
                 id.len() >= 8 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-            });
-            if !is_agent
-                || worktrees
-                    .iter()
-                    .any(|wt| wt.branch.as_deref() == Some(name.as_str()))
-            {
-                continue;
-            }
+            }) && !worktrees
+                .iter()
+                .any(|wt| wt.branch.as_deref() == Some(*name))
+        })
+        .collect();
+    if !leftovers.is_empty()
+        && let Some(target) = repo.default_branch()
+    {
+        for name in leftovers {
             let (_, reason) = repo.integration_reason(&snapshot, name, &target)?;
             findings.push(match reason {
                 Some(reason) => Finding {
                     kind: FindingKind::MergedAgentBranch,
                     path: None,
-                    branch: Some(name.clone()),
+                    branch: Some(name.to_string()),
                     detail: Some(format!("{} {target}", reason.description())),
                     fix: Some(format!("wt remove {name}")),
                 },
                 None => Finding {
                     kind: FindingKind::UnmergedAgentBranch,
                     path: None,
-                    branch: Some(name.clone()),
+                    branch: Some(name.to_string()),
                     detail: Some(format!("not merged into {target}")),
                     fix: Some(format!("git log {target}..{name}")),
                 },
