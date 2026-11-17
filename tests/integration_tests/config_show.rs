@@ -5876,7 +5876,7 @@ fn test_plugin_layout_is_consolidated() {
     // that carries an inline program. The root stays unbraced: Claude hands
     // each command to the user's login shell before `bash` launches, and fish
     // rejects `${CLAUDE_PLUGIN_ROOT}` ("Variables cannot be bracketed"). The
-    // marker events end in `|| true`: a `wt` too old to have `hook` exits 2,
+    // marker events and SessionStart end in `|| true`: a `wt` too old to have `hook` exits 2,
     // which Claude Code reads as blocking the prompt, tool call, permission,
     // or stop. The worktree events must fail when `wt` does.
     const HOOK: &str = r#"bash "$CLAUDE_PLUGIN_ROOT/hooks/wt.sh" config plugins claude hook"#;
@@ -5889,6 +5889,7 @@ fn test_plugin_layout_is_consolidated() {
             "PermissionRequest",
             "PreToolUse",
             "SessionEnd",
+            "SessionStart",
             "Stop",
             "UserPromptSubmit",
             "WorktreeCreate",

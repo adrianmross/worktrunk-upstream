@@ -1,6 +1,6 @@
 //! `wt config plugins claude hook`, the command behind every hook in the
 //! Claude Code plugin's `hooks/hooks.json`.
-use crate::common::{TestRepo, repo};
+use crate::common::{TestRepo, hide_host_wt, repo};
 use rstest::rstest;
 use std::io::Write as _;
 use std::path::Path;
@@ -220,4 +220,47 @@ fn test_claude_hook_worktree_remove(mut repo: TestRepo) {
     // A path that is already gone is nothing to remove.
     let again = run_hook(&repo, &outside, &outside, &payload.to_string());
     assert!(again.status.success());
+}
+
+/// `SessionStart` hands the agent doctor's findings as session context, and
+/// prints nothing for a clean repository or a directory in no repository.
+#[rstest]
+fn test_claude_hook_session_start_reports_doctor_findings(mut repo: TestRepo) {
+    let root = repo.root_path().to_path_buf();
+    let payload = r#"{"hook_event_name":"SessionStart","source":"startup"}"#;
+    let run_hook = |repo: &TestRepo, cwd: &Path, project_dir: &Path, payload: &str| {
+        let mut cmd = repo.wt_command();
+        cmd.env("CLAUDE_PROJECT_DIR", project_dir);
+        hide_host_wt(&mut cmd, repo);
+        spawn_hook(cmd, cwd, payload)
+    };
+
+    let clean = run_hook(&repo, &root, &root, payload);
+    assert!(clean.status.success(), "{clean:?}");
+    assert_eq!(stdout(&clean), "");
+
+    let missing = repo.home_path().join("missing");
+    let outside = run_hook(&repo, &root, &missing, payload);
+    assert!(outside.status.success(), "{outside:?}");
+    assert_eq!(stdout(&outside), "");
+
+    let gone = repo.add_worktree("gone");
+    std::fs::remove_dir_all(&gone).unwrap();
+    let output = run_hook(&repo, &root, &root, payload);
+    assert!(output.status.success(), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "SessionStart");
+    let context = json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(
+        context.starts_with("wt step doctor found worktree problems"),
+        "{context}"
+    );
+    assert!(
+        context.contains("Stale worktree entry @ ")
+            && context.contains("; run wt step doctor --fix"),
+        "{context}"
+    );
+    assert!(!context.contains('\x1b'), "context carries ANSI: {context}");
 }

@@ -385,7 +385,7 @@ fn handle_step_command(
             clobber,
             format,
         } => step_relocate(branches, repos, dry_run, commit, clobber, format),
-        StepCommand::Doctor { fix } => step_doctor(fix),
+        StepCommand::Doctor { fix, format } => step_doctor(fix, format),
         StepCommand::Tether { command } => step_tether(&command, working_dir.as_deref()),
         StepCommand::External(args) => commands::step_alias(args, yes),
     }

@@ -692,23 +692,39 @@ Report, then clear stale entries:
 $ wt step doctor --fix
 ```
 
+Print the findings as JSON:
+
+```console
+$ wt step doctor --format=json
+```
+
 ## Checks
 
 - **Stale entry** — git lists the worktree as prunable, usually because its directory was deleted or moved; shows git's reason
 - **Broken worktree** — git can't read the worktree's `HEAD` commit, as with a broken `objects/info/alternates` or `.git` file
 - **Stray directory** — a directory named like this repository's worktrees, beside them, that no worktree is registered at
 - **Agent worktree** — a worktree under `.claude/worktrees/` or `.codex/`, or a leftover directory in `.claude/worktrees/`
+- **wt binaries** — the `wt` and `git-wt` executables on `PATH` (only `git-wt` on Windows) and `WORKTRUNK_BIN` report different versions; agents and hooks without `WORKTRUNK_BIN` run the first on `PATH`
+- **Agent branch** — an `agent-<hex id>` branch, as Claude Code's `Agent` isolation names them, that no worktree has checked out; reported as merged into the default branch (delete with `wt remove <branch>`) or unmerged (review with `git log`)
 
 Registered agent worktrees move to their `worktree-path` location with `wt step relocate`; `wt config plugins claude install` has Claude Code create new ones there.
 
 ## Fixing
 
 The report changes nothing. `--fix` also runs `git worktree prune`, which clears stale entries only. Stray and leftover directories are left for you to inspect and remove.
+
+## JSON output
+
+`--format=json` prints the findings as an array, empty when there are none. Each finding has a `kind` (`stale_entry`, `broken_worktree`, `stray_directory`, `agent_worktree`, `agent_directory`, `wt_binaries`, `merged_agent_branch`, `unmerged_agent_branch`) and a `path` or `branch`, plus a `detail` (git's reason or error, each binary's version, or how a branch is merged) and a `fix` command when there is one.
 "#)]
     Doctor {
         /// Clear stale entries with `git worktree prune`
         #[arg(long)]
         fix: bool,
+
+        /// Output format
+        #[arg(long, default_value = "text")]
+        format: crate::cli::SwitchFormat,
     },
 
     /// \[experimental\] Move worktrees to expected paths
