@@ -704,7 +704,7 @@ $ wt step doctor --format=json
 - **Broken worktree** — git can't read the worktree's `HEAD` commit, as with a broken `objects/info/alternates` or `.git` file
 - **Stray directory** — a directory named like this repository's worktrees, beside them, that no worktree is registered at
 - **Agent worktree** — a worktree under `.claude/worktrees/` or `.codex/`, or a leftover directory in `.claude/worktrees/`
-- **wt binaries** — the `wt` and `git-wt` executables on `PATH` and `WORKTRUNK_BIN` report different versions; agents and hooks without `WORKTRUNK_BIN` run the first on `PATH`
+- **wt binaries** — the `wt` and `git-wt` executables on `PATH` (only `git-wt` on Windows) and `WORKTRUNK_BIN` report different versions; agents and hooks without `WORKTRUNK_BIN` run the first on `PATH`
 
 Registered agent worktrees move to their `worktree-path` location with `wt step relocate`; `wt config plugins claude install` has Claude Code create new ones there.
 

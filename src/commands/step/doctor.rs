@@ -261,8 +261,15 @@ pub(crate) fn diagnose(repo: &Repository) -> anyhow::Result<Vec<Finding>> {
 /// `--version`; a finding only when they disagree.
 fn wt_binaries_finding() -> Option<Finding> {
     let mut binaries: Vec<(PathBuf, PathBuf)> = Vec::new();
-    let candidates = ["wt", "git-wt"]
-        .into_iter()
+    // On Windows `wt` is usually Windows Terminal, which `--version` would
+    // open; Worktrunk installs there as `git-wt`.
+    let names: &[&str] = if cfg!(windows) {
+        &["git-wt"]
+    } else {
+        &["wt", "git-wt"]
+    };
+    let candidates = names
+        .iter()
         .filter_map(|name| which::which_all(name).ok())
         .flatten()
         .chain(std::env::var_os("WORKTRUNK_BIN").map(PathBuf::from));
