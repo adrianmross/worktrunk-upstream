@@ -11,6 +11,10 @@ fn test_doctor_clean(mut repo: TestRepo) {
     repo.add_worktree("feature");
 
     assert_cmd_snapshot!(make_snapshot_cmd(&repo, "step", &["doctor"], None));
+    assert_cmd_snapshot!(
+        "doctor_clean_json",
+        make_snapshot_cmd(&repo, "step", &["doctor", "--format=json"], None)
+    );
 }
 
 /// A deleted worktree directory is a stale entry; `--fix` prunes it.
@@ -20,6 +24,10 @@ fn test_doctor_stale_entry(mut repo: TestRepo) {
     fs::remove_dir_all(&path).unwrap();
 
     assert_cmd_snapshot!(make_snapshot_cmd(&repo, "step", &["doctor"], None));
+    assert_cmd_snapshot!(
+        "doctor_stale_entry_json",
+        make_snapshot_cmd(&repo, "step", &["doctor", "--format=json"], None)
+    );
     assert_cmd_snapshot!(
         "doctor_stale_entry_fix",
         make_snapshot_cmd(&repo, "step", &["doctor", "--fix"], None)
