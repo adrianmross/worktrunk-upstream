@@ -2149,11 +2149,7 @@ fn test_copy_ignored_background_priority_helper_is_traced(mut repo: TestRepo) {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let helper = if cfg!(target_os = "macos") {
-        "/usr/sbin/taskpolicy -b -p"
-    } else {
-        "renice -n 19 -p"
-    };
+    let helper = "renice -n 19 -p";
     let trace_log =
         crate::common::resolve_git_common_dir(repo.root_path()).join("wt/logs/trace.log");
     let trace = fs::read_to_string(&trace_log).unwrap();

@@ -56,7 +56,7 @@ pub fn step_copy_ignored(
     // (parent `wt` sets `WORKTRUNK_FOREGROUND=-1` on the detached runner).
     // Foreground callers — interactive `wt step copy-ignored` and synchronous
     // `pre-*` hook pipelines — are the UI the user is waiting on and must not
-    // be I/O-throttled by `taskpolicy -b` on macOS.
+    // be deprioritized.
     if worktrunk::priority::in_background_hook() {
         worktrunk::priority::lower_current_process();
     }
