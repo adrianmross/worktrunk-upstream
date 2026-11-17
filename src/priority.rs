@@ -8,10 +8,15 @@
 //!
 //! ## Policy
 //!
-//! - **macOS**: `taskpolicy -b` enters `PRIO_DARWIN_BG` — lowers CPU
-//!   scheduling *and* throttles disk + network I/O (see `setpriority(2)`).
-//!   `nice(1)`/`renice(8)` only touch CPU on Darwin, leaving the dominant
-//!   cost of a bulk `rm -rf` or reflink-fallback copy on APFS un-throttled.
+//! - **macOS**: `nice -n 19`, which lowers CPU scheduling only. Darwin's
+//!   I/O throttling (`taskpolicy -b`, `PRIO_DARWIN_BG`) is not used: a
+//!   throttled process is held back while normal-priority I/O keeps the
+//!   device busy, so under sustained disk activity (a test suite, Spotlight indexing) it
+//!   makes no progress at all — `taskpolicy -b /usr/bin/true` did not exit
+//!   within 30s on an otherwise 64%-idle machine. Each stalled trash drain
+//!   held its `sh`, `wt`, and `git` processes open, and a test suite
+//!   accumulated hundreds of them. Background work that finishes slowly is
+//!   acceptable; background work that never finishes is not.
 //! - **Linux**: `nice -n 19` for CPU plus best-effort `ionice -c 3` (idle
 //!   class) for I/O. `ionice` is probed once via `which` — it ships in
 //!   `util-linux` on every mainstream distro and is enabled in Alpine's
@@ -21,9 +26,8 @@
 //!
 //! ## Why shell out?
 //!
-//! `setpriority(2)` (with `PRIO_DARWIN_BG` on Darwin) and `setiopolicy_np(3)`
-//! would be more direct, but both are unsafe FFI and the crate has
-//! `#![forbid(unsafe_code)]`.
+//! `setpriority(2)` and `ioprio_set(2)` would be more direct, but both are
+//! unsafe FFI and the crate has `#![forbid(unsafe_code)]`.
 //!
 //! ## Forms
 //!
@@ -31,7 +35,7 @@
 //!   worktrunk process (and any threads/children it later spawns) should run
 //!   at lower priority. The policy is inherited across `fork`/`exec`.
 //! - [`command`] — build a [`Command`] that starts its child under the
-//!   policy, by wrapping it in `taskpolicy -b <cmd>` or
+//!   policy, by wrapping it in `nice -n 19 -- <cmd>` or
 //!   `ionice … nice … <cmd>`. Used for detached background spawns where we
 //!   want the wrapper tool itself to apply the policy and then exec the real
 //!   work.
@@ -98,14 +102,10 @@ pub fn lower_current_process() {
                 .run();
         };
 
-        #[cfg(target_os = "macos")]
-        run("/usr/sbin/taskpolicy", &["-b", "-p", &pid]);
+        run("renice", &["-n", "19", "-p", &pid]);
         #[cfg(not(target_os = "macos"))]
-        {
-            run("renice", &["-n", "19", "-p", &pid]);
-            if *HAS_IONICE {
-                run("ionice", &["-c", "3", "-p", &pid]);
-            }
+        if *HAS_IONICE {
+            run("ionice", &["-c", "3", "-p", &pid]);
         }
     }
 }
@@ -113,24 +113,20 @@ pub fn lower_current_process() {
 /// Build a [`Command`] that runs `program` at lowered priority when `lower`
 /// is set, or at normal priority when not.
 ///
-/// The wrapper tool (`taskpolicy` on macOS, `ionice`/`nice` on Linux) applies
-/// the policy and then execs `program`, so policy is inherited by the child
-/// and its descendants. `taskpolicy` takes `program` as a positional arg (no
-/// `--` separator accepted); safe because callers pass `sh` or an absolute
-/// path. See the [module docs](self) for the full policy.
+/// The wrapper tool (`nice`, plus `ionice` on Linux) applies the policy and
+/// then execs `program`, so policy is inherited by the child and its
+/// descendants. See the [module docs](self) for the full policy.
 pub fn command(program: impl AsRef<OsStr>, lower: bool) -> Command {
     if !lower {
         return Command::new(program);
     }
     #[cfg(target_os = "macos")]
     {
-        let mut cmd = Command::new("/usr/sbin/taskpolicy");
-        cmd.arg("-b").arg(program);
-        cmd
+        low_priority_command(program.as_ref(), false)
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        linux_low_priority_command(program.as_ref(), *HAS_IONICE)
+        low_priority_command(program.as_ref(), *HAS_IONICE)
     }
     #[cfg(not(unix))]
     {
@@ -138,11 +134,11 @@ pub fn command(program: impl AsRef<OsStr>, lower: bool) -> Command {
     }
 }
 
-/// Linux wrap: `ionice -c 3 -- nice -n 19 -- <program>` if `has_ionice`,
-/// else `nice -n 19 -- <program>`. Extracted so both branches are testable
+/// `ionice -c 3 -- nice -n 19 -- <program>` if `has_ionice`, else
+/// `nice -n 19 -- <program>`. Extracted so both branches are testable
 /// without depending on whether the runner has `ionice` installed.
-#[cfg(all(unix, not(target_os = "macos")))]
-fn linux_low_priority_command(program: &OsStr, has_ionice: bool) -> Command {
+#[cfg(unix)]
+fn low_priority_command(program: &OsStr, has_ionice: bool) -> Command {
     if has_ionice {
         let mut cmd = Command::new("ionice");
         cmd.args(["-c", "3", "--", "nice", "-n", "19", "--"])
@@ -190,18 +186,20 @@ mod tests {
         assert!(args_of(&cmd).is_empty());
     }
 
+    /// Not `taskpolicy -b`: its I/O throttling stalls background work
+    /// indefinitely under sustained disk load (see the module docs).
     #[cfg(target_os = "macos")]
     #[test]
-    fn command_lower_wraps_in_taskpolicy() {
+    fn command_lower_wraps_in_nice() {
         let cmd = command("echo", true);
-        assert_eq!(cmd.get_program(), "/usr/sbin/taskpolicy");
-        assert_eq!(args_of(&cmd), ["-b", "echo"]);
+        assert_eq!(cmd.get_program(), "nice");
+        assert_eq!(args_of(&cmd), ["-n", "19", "--", "echo"]);
     }
 
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(unix)]
     #[test]
-    fn linux_wrap_with_ionice() {
-        let cmd = linux_low_priority_command(OsStr::new("echo"), true);
+    fn wrap_with_ionice() {
+        let cmd = low_priority_command(OsStr::new("echo"), true);
         assert_eq!(cmd.get_program(), "ionice");
         assert_eq!(
             args_of(&cmd),
@@ -209,10 +207,10 @@ mod tests {
         );
     }
 
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(unix)]
     #[test]
-    fn linux_wrap_without_ionice() {
-        let cmd = linux_low_priority_command(OsStr::new("echo"), false);
+    fn wrap_without_ionice() {
+        let cmd = low_priority_command(OsStr::new("echo"), false);
         assert_eq!(cmd.get_program(), "nice");
         assert_eq!(args_of(&cmd), ["-n", "19", "--", "echo"]);
     }
