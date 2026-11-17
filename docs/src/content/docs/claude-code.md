@@ -146,7 +146,7 @@ Under OpenCode 2, the plugin registers a `worktrunk` worktree strategy, so workt
 
 ## Worktree problems at session start (Claude Code only)
 
-The plugin's `SessionStart` hook runs the checks of `wt step doctor` on the session's project directory. When they find stale entries, broken worktrees, stray directories, agent worktrees outside the `worktree-path` layout, or `wt` binaries that report different versions, the session starts with one line per problem and its fix command in the agent's context. A clean repository, or a directory outside any repository, adds nothing.
+The plugin's `SessionStart` hook runs the checks of `wt step doctor` on the session's project directory. When they find stale entries, broken worktrees, stray directories, agent worktrees outside the `worktree-path` layout, `wt` binaries that report different versions, or `agent-<id>` branches left without a worktree, the session starts with one line per problem and its fix command in the agent's context. A clean repository, or a directory outside any repository, adds nothing.
 
 ## `/wt-switch-create` skill (Claude Code only)
 
