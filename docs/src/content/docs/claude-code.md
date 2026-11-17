@@ -144,6 +144,10 @@ Claude Code agents can run in isolated worktrees (`isolation: "worktree"`). By d
 
 Under OpenCode 2, the plugin registers a `worktrunk` worktree strategy, so worktrees OpenCode creates and removes go through the same commands. Each gets a branch named after the worktree name OpenCode chooses, at the path from `worktree-path`; OpenCode's `worktree.directory` setting is ignored. New branches start from the default branch (or the starting ref OpenCode passes), not the current checkout's HEAD. A dirty worktree fails removal with worktrunk's message rather than an offer to force.
 
+## Worktree problems at session start (Claude Code only)
+
+The plugin's `SessionStart` hook runs the checks of `wt step doctor` on the session's project directory. When they find stale entries, broken worktrees, stray directories, or agent worktrees outside the `worktree-path` layout, the session starts with one line per problem and its fix command in the agent's context. A clean repository, or a directory outside any repository, adds nothing.
+
 ## `/wt-switch-create` skill (Claude Code only)
 
 `/wt-switch-create [<branch>] [<repo>] [-- <task>]` starts a task in a fresh worktree without leaving the session: it creates the worktree, switches into it, and runs the task (all arguments optional). The worktree shows up in `wt list`; merge or remove it with `wt merge` / `wt remove`.

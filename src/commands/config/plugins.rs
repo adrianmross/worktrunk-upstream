@@ -119,6 +119,7 @@ enum ClaudeHook {
     PreToolUse {},
     PermissionRequest(PermissionRequest),
     Stop {},
+    SessionStart {},
     SessionEnd {},
     WorktreeCreate { name: String },
     WorktreeRemove { worktree_path: PathBuf },
@@ -147,6 +148,10 @@ struct PermissionRequest {
 /// - Activity markers resolve against `CLAUDE_PROJECT_DIR`, the directory the
 ///   session launched in, so a shell `cd` during a turn can't retarget them to
 ///   another repository (#3921). A marker failure never fails the hook.
+/// - `SessionStart` runs `wt step doctor`'s checks on `CLAUDE_PROJECT_DIR`
+///   and, when they find something, hands the agent one line per finding
+///   with its fix command as session context. Anything else prints nothing,
+///   and an error never fails the session.
 /// - `PermissionRequest` approves an `EnterWorktree` into a worktrunk-managed
 ///   worktree (see [`approves_enter_worktree`]) and otherwise marks the
 ///   session 💬 while the dialog waits. One hook does both because Claude Code
@@ -176,6 +181,24 @@ pub fn handle_claude_hook() -> anyhow::Result<()> {
         ClaudeHook::UserPromptSubmit {} => set_marker(&project_dir, Some("🤖")),
         ClaudeHook::Notification {} | ClaudeHook::PreToolUse {} | ClaudeHook::Stop {} => {
             set_marker(&project_dir, Some("💬"))
+        }
+        ClaudeHook::SessionStart {} => {
+            if let Ok(findings) = Repository::at(&project_dir)
+                .and_then(|repo| crate::commands::step::doctor::diagnose(&repo))
+                && !findings.is_empty()
+            {
+                let lines: Vec<String> = findings.iter().map(|f| f.summary()).collect();
+                let _ = print_json(&serde_json::json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": "SessionStart",
+                        "additionalContext": format!(
+                            "wt step doctor found worktree problems in this repository:\n{}",
+                            lines.join("\n")
+                        ),
+                    }
+                }));
+            }
+            Ok(())
         }
         ClaudeHook::SessionEnd {} => set_marker(&project_dir, None),
         ClaudeHook::PermissionRequest(request) => {

@@ -74,6 +74,15 @@ impl Finding {
         }
     }
 
+    /// The headline as plain text, with the fix command when there is one.
+    pub(crate) fn summary(&self) -> String {
+        let line = anstream::adapter::strip_str(&self.line()).to_string();
+        match self.fix {
+            Some(fix) => format!("{line}; run {fix}"),
+            None => line,
+        }
+    }
+
     fn render(&self) -> String {
         let warning = warning_message(self.line());
         match (self.kind, &self.detail) {
