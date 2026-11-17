@@ -813,6 +813,7 @@ pub fn add_standard_env_redactions(settings: &mut insta::Settings) {
     );
     settings.add_redaction(".env.WORKTRUNK_DIRECTIVE_FILE", "[DIRECTIVE_FILE]");
     settings.add_redaction(".env.HOME", "[TEST_HOME]");
+    settings.add_redaction(".env.WORKTRUNK_BIN", "[WORKTRUNK_BIN]");
     // Windows: the `home` crate uses USERPROFILE for home_dir()
     settings.add_redaction(".env.USERPROFILE", "[TEST_HOME]");
     settings.add_redaction(".env.XDG_CONFIG_HOME", "[TEST_CONFIG_HOME]");
