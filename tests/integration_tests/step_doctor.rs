@@ -106,6 +106,11 @@ fn test_doctor_wt_binaries(repo: TestRepo) {
     let mut same = make_snapshot_cmd(&repo, "step", &["doctor"], None);
     same.env("PATH", joined(&[&old, &alias]));
     assert_cmd_snapshot!("doctor_wt_binaries_same", same);
+
+    let mut bin = make_snapshot_cmd(&repo, "step", &["doctor", "--format=json"], None);
+    bin.env("PATH", joined(&[&old]))
+        .env("WORKTRUNK_BIN", new.join("wt"));
+    assert_cmd_snapshot!("doctor_wt_binaries_worktrunk_bin", bin);
 }
 
 /// `agent-<hex id>` branches with no worktree are reported, merged with a
