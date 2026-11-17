@@ -71,3 +71,39 @@ fn test_doctor_agent_worktree(mut repo: TestRepo) {
 
     assert_cmd_snapshot!(make_snapshot_cmd(&repo, "step", &["doctor"], None));
 }
+
+/// `wt` binaries on PATH that report different versions are one finding,
+/// listing each; a symlink to one already seen is not counted twice.
+#[cfg(unix)]
+#[rstest]
+fn test_doctor_wt_binaries(repo: TestRepo) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = repo.root_path().join(".bins");
+    let path = crate::common::setup_minimal_path_with_git(&home.join("git"));
+    let fake = |dir: &str, version: &str| {
+        let dir = home.join(dir);
+        fs::create_dir_all(&dir).unwrap();
+        let wt = dir.join("wt");
+        fs::write(&wt, format!("#!/bin/sh\necho 'wt {version}'\n")).unwrap();
+        fs::set_permissions(&wt, fs::Permissions::from_mode(0o755)).unwrap();
+        dir
+    };
+    let old = fake("old", "0.1.0");
+    let new = fake("new", "0.2.0");
+    let alias = home.join("alias");
+    fs::create_dir_all(&alias).unwrap();
+    std::os::unix::fs::symlink(old.join("wt"), alias.join("wt")).unwrap();
+    let joined = |dirs: &[&std::path::Path]| {
+        let dirs: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
+        format!("{}:{path}", dirs.join(":"))
+    };
+
+    let mut cmd = make_snapshot_cmd(&repo, "step", &["doctor"], None);
+    cmd.env("PATH", joined(&[&old, &alias, &new]));
+    assert_cmd_snapshot!(cmd);
+
+    let mut same = make_snapshot_cmd(&repo, "step", &["doctor"], None);
+    same.env("PATH", joined(&[&old, &alias]));
+    assert_cmd_snapshot!("doctor_wt_binaries_same", same);
+}
