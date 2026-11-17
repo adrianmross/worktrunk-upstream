@@ -1,6 +1,6 @@
 //! `wt step doctor` — report worktree health problems for the current repository.
 //!
-//! Four read-only checks, printed to stdout as one report:
+//! Five read-only checks, printed to stdout as one report:
 //!
 //! - stale entries: registrations git lists as prunable
 //! - broken worktrees: live registrations where `git rev-parse` can't read `HEAD`
@@ -8,15 +8,19 @@
 //!   template's worktree location that no registration names
 //! - agent worktrees: registrations under `.claude/worktrees/` or `.codex/`, and
 //!   unregistered directories left in a worktree's `.claude/worktrees/`
+//! - wt binaries: the `wt` / `git-wt` executables on PATH and `WORKTRUNK_BIN`
+//!   report different `--version`s
 //!
 //! `--fix` runs only `git worktree prune`, which clears the stale entries and
 //! touches no directory or branch.
 
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 use color_print::cformat;
 use worktrunk::git::Repository;
 use worktrunk::path::{canonicalize_with_parents, format_path_for_display};
+use worktrunk::shell_exec::Cmd;
 use worktrunk::styling::{
     eprintln, format_with_gutter, hint_message, info_message, println, success_message,
     warning_message,
@@ -50,6 +54,7 @@ pub(crate) enum FindingKind {
     StrayDirectory,
     AgentWorktree,
     AgentDirectory,
+    WtBinaries,
 }
 
 impl Finding {
@@ -71,6 +76,9 @@ impl Finding {
             FindingKind::AgentDirectory => cformat!(
                 "Stale agent worktree directory @ <bold>{path}</>: not a registered worktree"
             ),
+            FindingKind::WtBinaries => cformat!(
+                "wt binaries report different versions; agents and hooks without <bold>WORKTRUNK_BIN</> run the first on PATH, <bold>{path}</>"
+            ),
         }
     }
 
@@ -86,7 +94,7 @@ impl Finding {
     fn render(&self) -> String {
         let warning = warning_message(self.line());
         match (self.kind, &self.detail) {
-            (FindingKind::BrokenWorktree, Some(error)) => {
+            (FindingKind::BrokenWorktree | FindingKind::WtBinaries, Some(error)) => {
                 format!("{warning}\n{}", format_with_gutter(error, None))
             }
             _ => warning.to_string(),
@@ -245,7 +253,60 @@ pub(crate) fn diagnose(repo: &Repository) -> anyhow::Result<Vec<Finding>> {
         }
     }
 
+    findings.extend(wt_binaries_finding());
     Ok(findings)
+}
+
+/// Every distinct `wt` / `git-wt` on PATH, plus `WORKTRUNK_BIN`, with its
+/// `--version`; a finding only when they disagree.
+fn wt_binaries_finding() -> Option<Finding> {
+    let mut binaries: Vec<(PathBuf, PathBuf)> = Vec::new();
+    // On Windows `wt` is usually Windows Terminal, which `--version` would
+    // open; Worktrunk installs there as `git-wt`.
+    let names: &[&str] = if cfg!(windows) {
+        &["git-wt"]
+    } else {
+        &["wt", "git-wt"]
+    };
+    let candidates = names
+        .iter()
+        .filter_map(|name| which::which_all(name).ok())
+        .flatten()
+        .chain(std::env::var_os("WORKTRUNK_BIN").map(PathBuf::from));
+    for path in candidates {
+        let resolved = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if !binaries.iter().any(|(r, _)| *r == resolved) {
+            binaries.push((resolved, path));
+        }
+    }
+    let versions: Vec<(PathBuf, String)> = binaries
+        .into_iter()
+        .map(|(_, path)| {
+            let version = Cmd::new(path.to_string_lossy())
+                .arg("--version")
+                .timeout(Duration::from_secs(2))
+                .run()
+                .ok()
+                .filter(|output| output.status.success())
+                .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+                .unwrap_or_else(|| "failed to run --version".to_string());
+            (path, version)
+        })
+        .collect();
+    if versions.iter().all(|(_, v)| *v == versions[0].1) {
+        return None;
+    }
+    let detail = versions
+        .iter()
+        .map(|(path, version)| format!("{} → {version}", format_path_for_display(path)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(Finding {
+        kind: FindingKind::WtBinaries,
+        path: versions[0].0.clone(),
+        detail: Some(detail),
+        fix: None,
+    })
 }
 
 /// A path inside Claude Code's (`.claude/worktrees/`) or Codex's (`.codex/`)

@@ -1,6 +1,6 @@
 //! `wt config plugins claude hook`, the command behind every hook in the
 //! Claude Code plugin's `hooks/hooks.json`.
-use crate::common::{TestRepo, repo};
+use crate::common::{TestRepo, hide_host_wt, repo};
 use rstest::rstest;
 use std::io::Write as _;
 use std::path::Path;
@@ -228,6 +228,12 @@ fn test_claude_hook_worktree_remove(mut repo: TestRepo) {
 fn test_claude_hook_session_start_reports_doctor_findings(mut repo: TestRepo) {
     let root = repo.root_path().to_path_buf();
     let payload = r#"{"hook_event_name":"SessionStart","source":"startup"}"#;
+    let run_hook = |repo: &TestRepo, cwd: &Path, project_dir: &Path, payload: &str| {
+        let mut cmd = repo.wt_command();
+        cmd.env("CLAUDE_PROJECT_DIR", project_dir);
+        hide_host_wt(&mut cmd, repo);
+        spawn_hook(cmd, cwd, payload)
+    };
 
     let clean = run_hook(&repo, &root, &root, payload);
     assert!(clean.status.success(), "{clean:?}");
