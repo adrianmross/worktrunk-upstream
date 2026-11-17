@@ -130,9 +130,9 @@ fn test_doctor_agent_branches(mut repo: TestRepo) {
     repo.run_git(&["worktree", "remove", "--force", unmerged.to_str().unwrap()]);
     repo.add_worktree("agent-fedcba98");
 
-    assert_cmd_snapshot!(make_snapshot_cmd(&repo, "step", &["doctor"], None));
+    assert_cmd_snapshot!(doctor(&repo, &["doctor"]));
     assert_cmd_snapshot!(
         "doctor_agent_branches_json",
-        make_snapshot_cmd(&repo, "step", &["doctor", "--format=json"], None)
+        doctor(&repo, &["doctor", "--format=json"])
     );
 }
