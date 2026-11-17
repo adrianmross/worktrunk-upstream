@@ -692,6 +692,12 @@ Report, then clear stale entries:
 $ wt step doctor --fix
 ```
 
+Print the findings as JSON:
+
+```console
+$ wt step doctor --format=json
+```
+
 ## Checks
 
 - **Stale entry** — git lists the worktree as prunable, usually because its directory was deleted or moved; shows git's reason
@@ -704,11 +710,19 @@ Registered agent worktrees move to their `worktree-path` location with `wt step 
 ## Fixing
 
 The report changes nothing. `--fix` also runs `git worktree prune`, which clears stale entries only. Stray and leftover directories are left for you to inspect and remove.
+
+## JSON output
+
+`--format=json` prints the findings as an array, empty when there are none. Each finding has a `kind` (`stale_entry`, `broken_worktree`, `stray_directory`, `agent_worktree`, `agent_directory`) and a `path`, plus a `detail` (git's reason or error) and a `fix` command when there is one.
 "#)]
     Doctor {
         /// Clear stale entries with `git worktree prune`
         #[arg(long)]
         fix: bool,
+
+        /// Output format
+        #[arg(long, default_value = "text")]
+        format: crate::cli::SwitchFormat,
     },
 
     /// \[experimental\] Move worktrees to expected paths
