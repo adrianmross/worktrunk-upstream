@@ -12,7 +12,8 @@
 //! - agent worktrees: registrations under `.claude/worktrees/` or `.codex/`, and
 //!   unregistered directories left in a worktree's `.claude/worktrees/`
 //! - wt binaries: the `wt` / `git-wt` executables on PATH and `WORKTRUNK_BIN`
-//!   report different `--version`s
+//!   report different `--version`s; with `wt-bin` set, the first on PATH or
+//!   `WORKTRUNK_BIN` is not that binary
 //! - agent branches: `agent-<hex id>` branches, from Claude Code's `Agent`
 //!   isolation, that no worktree has checked out, merged or not
 //!
@@ -25,7 +26,9 @@ use std::time::Duration;
 
 use color_print::cformat;
 use worktrunk::git::{ErrorExt, Repository, WorktrunkError, resolve_input_path};
-use worktrunk::path::{canonicalize_with_parents, format_path_for_display, paths_match};
+use worktrunk::path::{
+    canonicalize_with_parents, expand_tilde, format_path_for_display, paths_match,
+};
 use worktrunk::shell_exec::Cmd;
 use worktrunk::styling::{
     eprintln, error_message, format_with_gutter, hint_message, info_message, println,
@@ -69,6 +72,7 @@ pub(crate) enum FindingKind {
     AgentWorktree,
     AgentDirectory,
     WtBinaries,
+    WtBin,
     MergedAgentBranch,
     UnmergedAgentBranch,
 }
@@ -113,6 +117,9 @@ impl Finding {
             FindingKind::WtBinaries => cformat!(
                 "wt binaries report different versions; agents and hooks without <bold>WORKTRUNK_BIN</> run the first on PATH, <bold>{path}</>"
             ),
+            FindingKind::WtBin => cformat!(
+                "wt binaries agents and hooks run are not the configured <bold>wt-bin</>, <bold>{path}</>"
+            ),
             FindingKind::MergedAgentBranch => {
                 cformat!("Agent branch <bold>{branch}</> has no worktree; merged ({detail})")
             }
@@ -134,7 +141,10 @@ impl Finding {
     fn render(&self) -> String {
         let warning = warning_message(self.line());
         match (self.kind, &self.detail) {
-            (FindingKind::BrokenWorktree | FindingKind::WtBinaries, Some(error)) => {
+            (
+                FindingKind::BrokenWorktree | FindingKind::WtBinaries | FindingKind::WtBin,
+                Some(error),
+            ) => {
                 format!("{warning}\n{}", format_with_gutter(error, None))
             }
             (FindingKind::RootBranch, _) => format!(
@@ -499,7 +509,10 @@ pub(crate) fn diagnose(repo: &Repository) -> anyhow::Result<Vec<Finding>> {
         }
     }
 
-    findings.extend(wt_binaries_finding());
+    findings.extend(match &config.wt_bin {
+        Some(bin) => wt_bin_finding(Path::new(bin)),
+        None => wt_binaries_finding(),
+    });
     Ok(findings)
 }
 
@@ -552,6 +565,33 @@ fn wt_binaries_finding() -> Option<Finding> {
         path: Some(versions[0].0.clone()),
         branch: None,
         detail: Some(detail),
+        fix: None,
+    })
+}
+
+/// With `wt-bin` set, the binaries agents and hooks would run instead: the
+/// first `wt` on PATH, and `WORKTRUNK_BIN` when set.
+fn wt_bin_finding(expected: &Path) -> Option<Finding> {
+    let canonical =
+        |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let expected = canonical(&expand_tilde(expected));
+    let name = if cfg!(windows) { "git-wt" } else { "wt" };
+    let mut mismatches = Vec::new();
+    match which::which(name) {
+        Ok(path) if canonical(&path) == expected => {}
+        Ok(path) => mismatches.push(format!("PATH → {}", format_path_for_display(&path))),
+        Err(_) => mismatches.push(format!("PATH → no {name} found")),
+    }
+    if let Some(bin) = std::env::var_os("WORKTRUNK_BIN").map(PathBuf::from)
+        && canonical(&bin) != expected
+    {
+        mismatches.push(format!("WORKTRUNK_BIN → {}", format_path_for_display(&bin)));
+    }
+    (!mismatches.is_empty()).then(|| Finding {
+        kind: FindingKind::WtBin,
+        path: Some(expected),
+        branch: None,
+        detail: Some(mismatches.join("\n")),
         fix: None,
     })
 }

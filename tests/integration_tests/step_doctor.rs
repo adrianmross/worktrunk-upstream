@@ -225,3 +225,40 @@ fn test_doctor_repos(repo: TestRepo) {
         }])
     );
 }
+
+/// With `wt-bin` set, only the first `wt` on PATH and `WORKTRUNK_BIN` count:
+/// another binary later on PATH is fine, a different first one or
+/// `WORKTRUNK_BIN` is reported.
+#[cfg(unix)]
+#[rstest]
+fn test_doctor_wt_bin(repo: TestRepo) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = repo.root_path().join(".bins");
+    let path = crate::common::setup_minimal_path_with_git(&home.join("git"));
+    let fake = |dir: &str, version: &str| {
+        let dir = home.join(dir);
+        fs::create_dir_all(&dir).unwrap();
+        let wt = dir.join("wt");
+        fs::write(&wt, format!("#!/bin/sh\necho 'wt {version}'\n")).unwrap();
+        fs::set_permissions(&wt, fs::Permissions::from_mode(0o755)).unwrap();
+        dir
+    };
+    let old = fake("old", "0.1.0");
+    let new = fake("new", "0.2.0");
+    repo.write_test_config(&format!("wt-bin = \"{}\"\n", new.join("wt").display()));
+    let joined = |dirs: &[&std::path::Path]| {
+        let dirs: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
+        format!("{}:{path}", dirs.join(":"))
+    };
+
+    let mut first = doctor(&repo, &["doctor"]);
+    first.env("PATH", joined(&[&new, &old]));
+    assert_cmd_snapshot!("doctor_wt_bin_first", first);
+
+    let mut shadowed = doctor(&repo, &["doctor"]);
+    shadowed
+        .env("PATH", joined(&[&old, &new]))
+        .env("WORKTRUNK_BIN", old.join("wt"));
+    assert_cmd_snapshot!("doctor_wt_bin_shadowed", shadowed);
+}

@@ -180,6 +180,12 @@ Bare repository cloned to [2m~/code/myproject/.git[0m ([2m~/code/myproject/fe
 
 [2m~[0m expands to the home directory. Relative paths resolve from [2mrepo_path[0m.
 
+[1m[32mwt binary[0m
+
+The [2mwt[0m binary agents and hooks should run. When set, [2mwt step doctor[0m warns if the first [2mwt[0m on [2mPATH[0m, or [2mWORKTRUNK_BIN[0m, is another binary, instead of comparing the versions of every [2mwt[0m on [2mPATH[0m. [2m~[0m expands to the home directory.
+
+[107m [0m [2mwt-bin = [0m[2m[32m"~/.cargo/bin/wt"[0m
+
 [1m[32mLLM commit messages[0m
 
 Generate commit messages automatically during merge. Requires an external CLI tool.
