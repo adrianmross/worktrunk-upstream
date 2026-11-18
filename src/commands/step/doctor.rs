@@ -19,16 +19,17 @@
 //! `--fix` runs only `git worktree prune`, which clears the stale entries and
 //! touches no directory or branch.
 
+use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use color_print::cformat;
-use worktrunk::git::Repository;
+use worktrunk::git::{ErrorExt, Repository, WorktrunkError, resolve_input_path};
 use worktrunk::path::{canonicalize_with_parents, format_path_for_display, paths_match};
 use worktrunk::shell_exec::Cmd;
 use worktrunk::styling::{
-    eprintln, format_with_gutter, hint_message, info_message, println, success_message,
-    warning_message,
+    eprintln, error_message, format_with_gutter, hint_message, info_message, println,
+    progress_message, success_message, warning_message,
 };
 
 use super::super::worktree::compute_worktree_path;
@@ -168,51 +169,139 @@ impl Finding {
     }
 }
 
-pub fn step_doctor(fix: bool, format: crate::cli::SwitchFormat) -> anyhow::Result<()> {
-    let repo = Repository::current()?;
-    let findings = diagnose(&repo)?;
+/// A finding tagged with its repository, for `--repo` with `--format=json`.
+#[derive(serde::Serialize)]
+struct RepoFinding {
+    repo: PathBuf,
+    #[serde(flatten)]
+    finding: Finding,
+}
+
+pub fn step_doctor(
+    repos: Vec<PathBuf>,
+    fix: bool,
+    format: crate::cli::SwitchFormat,
+) -> anyhow::Result<()> {
+    let json = format == crate::cli::SwitchFormat::Json;
+    if repos.is_empty() {
+        let repo = Repository::current()?;
+        let findings = diagnose(&repo)?;
+        if json {
+            print_json(&findings)?;
+        } else {
+            print_report(&findings, fix);
+        }
+        return prune_stale(&repo, &findings, fix);
+    }
+
+    let mut seen = HashSet::new();
+    let mut tagged = Vec::new();
+    let mut failed = false;
+    for path in repos.iter().map(resolve_input_path) {
+        // A shell glob like `~/code/org/*` also matches plain files.
+        if !path.is_dir() {
+            continue;
+        }
+        let display = format_path_for_display(&path);
+        let repo = match Repository::at(path.clone()) {
+            Ok(repo) if repo.repo_path().is_ok_and(|root| paths_match(root, &path)) => repo,
+            _ => {
+                eprintln!(
+                    "{}",
+                    info_message(cformat!(
+                        "Skipping <bold>{display}</> (not a repository's primary checkout)"
+                    ))
+                );
+                continue;
+            }
+        };
+        if !seen.insert(repo.git_common_dir().to_path_buf()) {
+            continue;
+        }
+        if !json {
+            eprintln!(
+                "{}",
+                progress_message(cformat!("Checking <bold>{display}</>..."))
+            );
+        }
+        let result = diagnose(&repo).and_then(|findings| {
+            if !json {
+                print_report(&findings, fix);
+            }
+            prune_stale(&repo, &findings, fix)?;
+            Ok(findings)
+        });
+        match result {
+            Ok(findings) => tagged.extend(findings.into_iter().map(|finding| RepoFinding {
+                repo: path.clone(),
+                finding,
+            })),
+            Err(err) => {
+                if err.interrupt_signal().is_some() {
+                    return Err(err);
+                }
+                let detail = err
+                    .render_diagnostic()
+                    .unwrap_or_else(|| err.display_message());
+                eprintln!("{}", error_message(format!("Failed in {display}")));
+                eprintln!("{}", format_with_gutter(&detail, None));
+                failed = true;
+            }
+        }
+    }
+    if json {
+        print_json(&tagged)?;
+    }
+    if failed {
+        return Err(WorktrunkError::AlreadyDisplayed { exit_code: 1 }.into());
+    }
+    Ok(())
+}
+
+/// Print `findings` as text, with the hints that apply to them.
+fn print_report(findings: &[Finding], fix: bool) {
+    if findings.is_empty() {
+        eprintln!("{}", info_message("No worktree problems found"));
+        return;
+    }
+    for finding in findings {
+        println!("{}", finding.render());
+    }
+    if !fix && findings.iter().any(|f| f.kind == FindingKind::StaleEntry) {
+        println!(
+            "{}",
+            hint_message(cformat!(
+                "To clear stale entries, run <underline>wt step doctor --fix</>"
+            ))
+        );
+    }
+    if findings.iter().any(|f| {
+        matches!(
+            f.kind,
+            FindingKind::AgentWorktree | FindingKind::AgentDirectory
+        )
+    }) {
+        println!(
+            "{}",
+            hint_message(cformat!(
+                "To move registered agent worktrees to their <bold>worktree-path</> location, run <underline>wt step relocate</>"
+            ))
+        );
+        println!(
+            "{}",
+            hint_message(cformat!(
+                "To have Claude Code create worktrees in this layout, run <underline>wt config plugins claude install</>"
+            ))
+        );
+    }
+}
+
+/// With `--fix`, clear `repo`'s stale entries with `git worktree prune`.
+fn prune_stale(repo: &Repository, findings: &[Finding], fix: bool) -> anyhow::Result<()> {
     let stale = findings
         .iter()
         .filter(|f| f.kind == FindingKind::StaleEntry)
         .count();
-
-    if format == crate::cli::SwitchFormat::Json {
-        print_json(&findings)?;
-    } else if findings.is_empty() {
-        eprintln!("{}", info_message("No worktree problems found"));
-    } else {
-        for finding in &findings {
-            println!("{}", finding.render());
-        }
-        if stale > 0 && !fix {
-            println!(
-                "{}",
-                hint_message(cformat!(
-                    "To clear stale entries, run <underline>wt step doctor --fix</>"
-                ))
-            );
-        }
-        if findings.iter().any(|f| {
-            matches!(
-                f.kind,
-                FindingKind::AgentWorktree | FindingKind::AgentDirectory
-            )
-        }) {
-            println!(
-                "{}",
-                hint_message(cformat!(
-                    "To move registered agent worktrees to their <bold>worktree-path</> location, run <underline>wt step relocate</>"
-                ))
-            );
-            println!(
-                "{}",
-                hint_message(cformat!(
-                    "To have Claude Code create worktrees in this layout, run <underline>wt config plugins claude install</>"
-                ))
-            );
-        }
-    }
-
     if fix && stale > 0 {
         repo.run_command(&["worktree", "prune"])?;
         eprintln!(

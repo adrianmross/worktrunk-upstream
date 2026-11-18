@@ -692,6 +692,12 @@ Report, then clear stale entries:
 $ wt step doctor --fix
 ```
 
+Check every repository in a directory:
+
+```console
+$ wt step doctor --repo ~/code/org/*
+```
+
 Print the findings as JSON:
 
 ```console
@@ -717,9 +723,16 @@ The report changes nothing. `--fix` also runs `git worktree prune`, which clears
 
 ## JSON output
 
-`--format=json` prints the findings as an array, empty when there are none. Each finding has a `kind` (`root_branch`, `nested_worktree`, `stale_entry`, `broken_worktree`, `stray_directory`, `agent_worktree`, `agent_directory`, `wt_binaries`, `merged_agent_branch`, `unmerged_agent_branch`) and a `path` or `branch`, plus a `detail` (git's reason or error, each binary's version, how a branch is merged, or the default branch the primary worktree is off) and a `fix` command when there is one.
+`--format=json` prints the findings as an array, empty when there are none. Each finding has a `kind` (`root_branch`, `nested_worktree`, `stale_entry`, `broken_worktree`, `stray_directory`, `agent_worktree`, `agent_directory`, `wt_binaries`, `merged_agent_branch`, `unmerged_agent_branch`) and a `path` or `branch`, plus a `detail` (git's reason or error, each binary's version, how a branch is merged, or the default branch the primary worktree is off) and a `fix` command when there is one. With `--repo`, it is one array across the repositories, and each finding also has a `repo`.
 "#)]
     Doctor {
+        /// Repositories to check, by primary checkout path
+        ///
+        /// Paths that aren't a repository's primary checkout are skipped, so a
+        /// glob over a directory of repositories works.
+        #[arg(long = "repo", value_name = "PATH", num_args = 1..)]
+        repos: Vec<std::path::PathBuf>,
+
         /// Clear stale entries with `git worktree prune`
         #[arg(long)]
         fix: bool,

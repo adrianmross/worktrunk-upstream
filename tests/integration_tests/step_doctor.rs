@@ -185,3 +185,57 @@ fn test_doctor_nested_worktree_by_template(mut repo: TestRepo) {
 
     assert_cmd_snapshot!(doctor(&repo, &["doctor"]));
 }
+
+/// `--repo` checks each repository under its own header, skipping a plain
+/// directory, a file, and a repeat; with JSON, one array tags each finding
+/// with its repository.
+#[rstest]
+fn test_doctor_repos(repo: TestRepo) {
+    let parent = fs::canonicalize(repo.root_path().parent().unwrap()).unwrap();
+    let alpha = parent.join("alpha");
+    fs::create_dir(&alpha).unwrap();
+    repo.run_git_in(&alpha, &["init", "-q", "-b", "main"]);
+    repo.run_git_in(&alpha, &["commit", "-q", "--allow-empty", "-m", "init"]);
+    repo.run_git_in(&alpha, &["switch", "-q", "-c", "wip"]);
+    let plain = parent.join("plain");
+    fs::create_dir(&plain).unwrap();
+    let file = parent.join("notes.md");
+    fs::write(&file, "").unwrap();
+    // Spelled through the repo root so the snapshot's `args:` redact to `_REPO_/..`.
+    let root = repo.root_path();
+    let paths: Vec<String> = [
+        root.join("../alpha"),
+        root.join("../plain"),
+        root.join("../notes.md"),
+        root.to_path_buf(),
+        root.join("../alpha"),
+    ]
+    .iter()
+    .map(|p| p.display().to_string())
+    .collect();
+    let mut args = vec!["doctor", "--repo"];
+    args.extend(paths.iter().map(String::as_str));
+    assert_cmd_snapshot!(doctor(&repo, &args));
+
+    let paths: Vec<String> = [&alpha, &plain, &file, repo.root_path(), &alpha]
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
+    let mut args = vec!["doctor", "--repo"];
+    args.extend(paths.iter().map(String::as_str));
+    args.push("--format=json");
+    let output = doctor(&repo, &args).output().unwrap();
+    assert!(output.status.success());
+    let findings: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        findings,
+        serde_json::json!([{
+            "repo": alpha,
+            "kind": "root_branch",
+            "path": alpha,
+            "branch": "wip",
+            "detail": "main",
+            "fix": format!("git -C {} switch main", alpha.display()),
+        }])
+    );
+}
