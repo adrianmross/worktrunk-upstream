@@ -740,6 +740,7 @@ impl<'a> RelocationExecutor<'a> {
             create_parent_dir(&dest_path)?;
             move_linked_worktree(self.repo, &src_path, &dest_path)
                 .context("Failed to move worktree")?;
+            prune_empty_parents(self.repo, &src_path);
         }
 
         let msg = cformat!("Relocated <bold>{branch}</>: {src_display} → {dest_display}");
@@ -820,6 +821,7 @@ impl<'a> RelocationExecutor<'a> {
 
         move_linked_worktree(self.repo, &candidate.wt.path, &temp_path)
             .context("Failed to move worktree to temp")?;
+        prune_empty_parents(self.repo, &candidate.wt.path);
 
         // Update current_locations to reflect the move
         let old_canonical = candidate
@@ -883,6 +885,21 @@ fn create_parent_dir(dest: &Path) -> anyhow::Result<()> {
             .with_context(|| format!("Failed to create {}", format_path_for_display(parent)))?;
     }
     Ok(())
+}
+
+/// Remove directories a moved worktree left empty, such as the
+/// `.claude/worktrees` an agent created inside the main worktree. Only
+/// directories strictly inside the main worktree are touched, and only while
+/// empty: anything outside is the user's own layout.
+fn prune_empty_parents(repo: &Repository, src: &Path) {
+    let Ok(root) = repo.repo_path() else {
+        return;
+    };
+    for dir in src.ancestors().skip(1) {
+        if !dir.starts_with(root) || paths_match(dir, root) || std::fs::remove_dir(dir).is_err() {
+            break;
+        }
+    }
 }
 
 /// Move a linked worktree, including one with submodules.
