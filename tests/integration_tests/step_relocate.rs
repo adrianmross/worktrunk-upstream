@@ -2217,3 +2217,37 @@ fn test_relocate_repos_dry_run(repo: TestRepo) {
     assert!(!parent.join("alpha.feature").exists());
     assert!(!parent.join("beta.feature").exists());
 }
+
+/// Adopting an agent-created tree (`.claude/worktrees/<name>` on a throwaway
+/// branch): rename the branch, then relocate. The emptied `.claude/worktrees`
+/// goes; `.claude` stays because it holds other files.
+#[rstest]
+fn test_relocate_adopts_nested_agent_worktree(repo: TestRepo) {
+    let root = repo.root_path().to_path_buf();
+    fs::create_dir_all(root.join(".claude")).unwrap();
+    fs::write(root.join(".claude/settings.json"), "{}").unwrap();
+    let agent_path = root.join(".claude/worktrees/foo");
+    repo.run_git(&[
+        "worktree",
+        "add",
+        "-b",
+        "worktree-foo",
+        agent_path.to_str().unwrap(),
+    ]);
+    fs::write(agent_path.join("scratch.txt"), "untracked").unwrap();
+    repo.run_git_in(&agent_path, &["branch", "-m", "feat/foo"]);
+
+    let output = make_snapshot_cmd(&repo, "step", &["relocate", "feat/foo"], None)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let expected = worktree_parent(&repo).join("repo.feat-foo");
+    assert!(expected.join("scratch.txt").exists());
+    assert!(!root.join(".claude/worktrees").exists());
+    assert!(root.join(".claude/settings.json").exists());
+}
