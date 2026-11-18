@@ -5512,7 +5512,8 @@ fn test_codex_plugin_metadata_is_valid_json() {
     assert_eq!(markers["name"], "worktrunk-markers");
     // Exactly the Codex-native events — no Claude-only `Notification`,
     // `WorktreeCreate`, or `WorktreeRemove`. `Stop` returns 🤖 to 💬 at turn
-    // end, and `SessionEnd` clears the marker when the main thread ends.
+    // end, `SessionEnd` clears the marker when the main thread ends, and
+    // `SessionStart` hands the session `wt step doctor`'s findings.
     let codex_hooks = markers
         .get("hooks")
         .and_then(|h| h.get("hooks"))
@@ -5529,6 +5530,7 @@ fn test_codex_plugin_metadata_is_valid_json() {
         [
             "PermissionRequest",
             "SessionEnd",
+            "SessionStart",
             "Stop",
             "UserPromptSubmit"
         ]
@@ -5963,9 +5965,9 @@ fn test_codex_hooks_carry_windows_commands() {
         .collect();
     assert_eq!(
         hooks.len(),
-        4,
-        "expected all 4 Codex hooks (UserPromptSubmit, PermissionRequest, Stop, \
-         SessionEnd); a newly added one must be pinned too"
+        5,
+        "expected all 5 Codex hooks (SessionStart, UserPromptSubmit, \
+         PermissionRequest, Stop, SessionEnd); a newly added one must be pinned too"
     );
 
     for hook in hooks {

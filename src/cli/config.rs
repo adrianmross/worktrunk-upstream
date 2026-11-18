@@ -323,6 +323,10 @@ $ codex plugin marketplace remove worktrunk
 Requires `codex` CLI."#
     )]
     Uninstall,
+
+    /// Internal: the markers plugin's hook command, reading Codex's hook payload from stdin
+    #[command(hide = true)]
+    Hook,
 }
 
 // Ordering: read first (list), then action + inverse adjacent (add, clear).
