@@ -1,5 +1,6 @@
 //! `wt config plugins claude hook`, the command behind every hook in the
-//! Claude Code plugin's `hooks/hooks.json`.
+//! Claude Code plugin's `hooks/hooks.json`, and `wt config plugins codex
+//! hook`, the Codex markers plugin's `SessionStart` hook.
 use crate::common::{TestRepo, repo};
 use rstest::rstest;
 use std::io::Write as _;
@@ -265,4 +266,62 @@ fn test_claude_hook_session_start_reports_doctor_findings(mut repo: TestRepo) {
         "{context}"
     );
     assert!(!context.contains('\x1b'), "context carries ANSI: {context}");
+}
+
+/// Runs `wt config plugins codex hook` with `payload` on stdin from `cwd`,
+/// asserting success, and returns its stdout.
+fn run_codex_hook(repo: &TestRepo, cwd: &Path, payload: serde_json::Value) -> String {
+    let mut cmd = repo.wt_command();
+    cmd.args(["config", "plugins", "codex", "hook"])
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.to_string().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    stdout(&output)
+}
+
+/// Codex's `SessionStart` gets the same doctor context, resolved from the
+/// payload's `cwd`. Other events, and a clean repository, print nothing.
+#[rstest]
+fn test_codex_hook_session_start_reports_doctor_findings(mut repo: TestRepo) {
+    let root = repo.root_path().to_path_buf();
+    let outside = repo.home_path().to_path_buf();
+    let start = serde_json::json!({
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+        "cwd": root,
+    });
+
+    assert_eq!(run_codex_hook(&repo, &outside, start.clone()), "");
+    // No `cwd`: the hook's own directory, here in no repository.
+    assert_eq!(
+        run_codex_hook(
+            &repo,
+            &outside,
+            serde_json::json!({"hook_event_name": "SessionStart"})
+        ),
+        ""
+    );
+
+    let gone = repo.add_worktree("gone");
+    std::fs::remove_dir_all(&gone).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&run_codex_hook(&repo, &outside, start)).unwrap();
+    assert_eq!(json["hookSpecificOutput"]["hookEventName"], "SessionStart");
+    let context = json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("Stale worktree entry @ "), "{context}");
+
+    let stop = serde_json::json!({"hook_event_name": "Stop", "cwd": root});
+    assert_eq!(run_codex_hook(&repo, &outside, stop), "");
 }
