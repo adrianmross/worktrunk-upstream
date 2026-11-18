@@ -201,14 +201,28 @@ fn test_doctor_repos(repo: TestRepo) {
     fs::create_dir(&plain).unwrap();
     let file = parent.join("notes.md");
     fs::write(&file, "").unwrap();
+    // Spelled through the repo root so the snapshot's `args:` redact to `_REPO_/..`.
+    let root = repo.root_path();
+    let paths: Vec<String> = [
+        root.join("../alpha"),
+        root.join("../plain"),
+        root.join("../notes.md"),
+        root.to_path_buf(),
+        root.join("../alpha"),
+    ]
+    .iter()
+    .map(|p| p.display().to_string())
+    .collect();
+    let mut args = vec!["doctor", "--repo"];
+    args.extend(paths.iter().map(String::as_str));
+    assert_cmd_snapshot!(doctor(&repo, &args));
+
     let paths: Vec<String> = [&alpha, &plain, &file, repo.root_path(), &alpha]
         .iter()
         .map(|p| p.display().to_string())
         .collect();
     let mut args = vec!["doctor", "--repo"];
     args.extend(paths.iter().map(String::as_str));
-
-    assert_cmd_snapshot!(doctor(&repo, &args));
     args.push("--format=json");
     let output = doctor(&repo, &args).output().unwrap();
     assert!(output.status.success());
