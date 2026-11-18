@@ -630,6 +630,10 @@ pub struct UserConfig {
     )]
     #[schemars(with = "std::collections::BTreeMap<String, String>")]
     pub worktree_roots: indexmap::IndexMap<String, String>,
+    /// The `wt` binary agents and hooks should run; `wt step doctor` warns
+    /// when `PATH` or `WORKTRUNK_BIN` resolves to another one
+    #[serde(rename = "wt-bin", default, skip_serializing_if = "Option::is_none")]
+    pub wt_bin: Option<String>,
 
     /// Configuration for the `wt list` command
     #[serde(default, skip_serializing_if = "super::is_default")]

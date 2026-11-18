@@ -146,6 +146,12 @@ Creates [2m~/.config/worktrunk/config.toml[0m with the following content:
 [107m [0m [2m#[0m
 [107m [0m [2m# With no match, relative paths resolve from `repo_path`. `wt step relocate` moves existing worktrees after a change.[0m
 [107m [0m [2m#[0m
+[107m [0m [2m# ## wt binary[0m
+[107m [0m [2m#[0m
+[107m [0m [2m# The `wt` binary agents and hooks should run. When set, `wt step doctor` warns if the first `wt` on `PATH`, or `WORKTRUNK_BIN`, is another binary, instead of comparing the versions of every `wt` on `PATH`. `~` expands to the home directory.[0m
+[107m [0m [2m#[0m
+[107m [0m [2m# wt-bin = "~/.cargo/bin/wt"[0m
+[107m [0m [2m#[0m
 [107m [0m [2m# ## LLM commit messages[0m
 [107m [0m [2m#[0m
 [107m [0m [2m# Generate commit messages automatically during merge. Requires an external CLI tool.[0m

@@ -147,6 +147,14 @@ worktree-path = "{{ repo }}.{{ branch | sanitize }}"
 
 With no match, relative paths resolve from `repo_path`. `wt step relocate` moves existing worktrees after a change.
 
+## wt binary
+
+The `wt` binary agents and hooks should run. When set, `wt step doctor` warns if the first `wt` on `PATH`, or `WORKTRUNK_BIN`, is another binary, instead of comparing the versions of every `wt` on `PATH`. `~` expands to the home directory.
+
+```toml
+wt-bin = "~/.cargo/bin/wt"
+```
+
 ## LLM commit messages
 
 Generate commit messages automatically during merge. Requires an external CLI tool.

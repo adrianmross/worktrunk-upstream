@@ -692,6 +692,12 @@ Report, then clear stale entries:
 $ wt step doctor --fix
 ```
 
+Check every repository in a directory:
+
+```console
+$ wt step doctor --repo ~/code/org/*
+```
+
 Print the findings as JSON:
 
 ```console
@@ -700,11 +706,13 @@ $ wt step doctor --format=json
 
 ## Checks
 
+- **Root branch** — the primary worktree is not on the default branch; switch it back with `git -C <path> switch <default>`
+- **Nested worktree** — a worktree inside the primary worktree, unless the `worktree-path` template puts worktrees there; `.claude/worktrees/` trees are reported as agent worktrees
 - **Stale entry** — git lists the worktree as prunable, usually because its directory was deleted or moved; shows git's reason
 - **Broken worktree** — git can't read the worktree's `HEAD` commit, as with a broken `objects/info/alternates` or `.git` file
 - **Stray directory** — a directory named like this repository's worktrees, beside them, that no worktree is registered at
 - **Agent worktree** — a worktree under `.claude/worktrees/` or `.codex/`, or a leftover directory in `.claude/worktrees/`
-- **wt binaries** — the `wt` and `git-wt` executables on `PATH` (only `git-wt` on Windows) and `WORKTRUNK_BIN` report different versions; agents and hooks without `WORKTRUNK_BIN` run the first on `PATH`
+- **wt binaries** — the `wt` and `git-wt` executables on `PATH` (only `git-wt` on Windows) and `WORKTRUNK_BIN` report different versions; agents and hooks without `WORKTRUNK_BIN` run the first on `PATH`. With [`wt-bin`](/config/#wt-binary) set in user config, instead: the first on `PATH`, or `WORKTRUNK_BIN`, is not that binary
 - **Agent branch** — an `agent-<hex id>` branch, as Claude Code's `Agent` isolation names them, that no worktree has checked out; reported as merged into the default branch (delete with `wt remove <branch>`) or unmerged (review with `git log`)
 
 Registered agent worktrees move to their `worktree-path` location with `wt step relocate`; `wt config plugins claude install` has Claude Code create new ones there.
@@ -715,9 +723,16 @@ The report changes nothing. `--fix` also runs `git worktree prune`, which clears
 
 ## JSON output
 
-`--format=json` prints the findings as an array, empty when there are none. Each finding has a `kind` (`stale_entry`, `broken_worktree`, `stray_directory`, `agent_worktree`, `agent_directory`, `wt_binaries`, `merged_agent_branch`, `unmerged_agent_branch`) and a `path` or `branch`, plus a `detail` (git's reason or error, each binary's version, or how a branch is merged) and a `fix` command when there is one.
+`--format=json` prints the findings as an array, empty when there are none. Each finding has a `kind` (`root_branch`, `nested_worktree`, `stale_entry`, `broken_worktree`, `stray_directory`, `agent_worktree`, `agent_directory`, `wt_binaries`, `wt_bin`, `merged_agent_branch`, `unmerged_agent_branch`) and a `path` or `branch`, plus a `detail` (git's reason or error, each binary's version, how a branch is merged, or the default branch the primary worktree is off) and a `fix` command when there is one. With `--repo`, it is one array across the repositories, and each finding also has a `repo`.
 "#)]
     Doctor {
+        /// Repositories to check, by primary checkout path
+        ///
+        /// Paths that aren't a repository's primary checkout are skipped, so a
+        /// glob over a directory of repositories works.
+        #[arg(long = "repo", value_name = "PATH", num_args = 1..)]
+        repos: Vec<std::path::PathBuf>,
+
         /// Clear stale entries with `git worktree prune`
         #[arg(long)]
         fix: bool,

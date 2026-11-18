@@ -1,7 +1,10 @@
 //! `wt step doctor` — report worktree health problems for the current repository.
 //!
-//! Six read-only checks, printed to stdout as one report:
+//! Eight read-only checks, printed to stdout as one report:
 //!
+//! - root branch: the primary worktree is not on the default branch
+//! - nested worktrees: registrations inside the primary worktree, unless the
+//!   `worktree-path` template puts them there
 //! - stale entries: registrations git lists as prunable
 //! - broken worktrees: live registrations where `git rev-parse` can't read `HEAD`
 //! - stray directories: `<prefix><name><suffix>` directories beside the
@@ -9,23 +12,27 @@
 //! - agent worktrees: registrations under `.claude/worktrees/` or `.codex/`, and
 //!   unregistered directories left in a worktree's `.claude/worktrees/`
 //! - wt binaries: the `wt` / `git-wt` executables on PATH and `WORKTRUNK_BIN`
-//!   report different `--version`s
+//!   report different `--version`s; with `wt-bin` set, the first on PATH or
+//!   `WORKTRUNK_BIN` is not that binary
 //! - agent branches: `agent-<hex id>` branches, from Claude Code's `Agent`
 //!   isolation, that no worktree has checked out, merged or not
 //!
 //! `--fix` runs only `git worktree prune`, which clears the stale entries and
 //! touches no directory or branch.
 
+use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use color_print::cformat;
-use worktrunk::git::Repository;
-use worktrunk::path::{canonicalize_with_parents, format_path_for_display};
+use worktrunk::git::{ErrorExt, Repository, WorktrunkError, resolve_input_path};
+use worktrunk::path::{
+    canonicalize_with_parents, expand_tilde, format_path_for_display, paths_match,
+};
 use worktrunk::shell_exec::Cmd;
 use worktrunk::styling::{
-    eprintln, format_with_gutter, hint_message, info_message, println, success_message,
-    warning_message,
+    eprintln, error_message, format_with_gutter, hint_message, info_message, println,
+    progress_message, success_message, warning_message,
 };
 
 use super::super::worktree::compute_worktree_path;
@@ -41,10 +48,12 @@ pub(crate) struct Finding {
     pub kind: FindingKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
-    /// The branch, for agent branches left without a worktree.
+    /// The branch, for agent branches left without a worktree and the
+    /// primary worktree's branch.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
-    /// Git's reason or error, for stale entries and broken worktrees.
+    /// Git's reason or error, for stale entries and broken worktrees; the
+    /// default branch, for a primary worktree off it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     /// The command that addresses this finding, when one exists.
@@ -55,12 +64,15 @@ pub(crate) struct Finding {
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum FindingKind {
+    RootBranch,
+    NestedWorktree,
     StaleEntry,
     BrokenWorktree,
     StrayDirectory,
     AgentWorktree,
     AgentDirectory,
     WtBinaries,
+    WtBin,
     MergedAgentBranch,
     UnmergedAgentBranch,
 }
@@ -76,6 +88,19 @@ impl Finding {
         let branch = self.branch.as_deref().unwrap_or_default();
         let detail = self.detail.as_deref().unwrap_or_default();
         match self.kind {
+            FindingKind::RootBranch => {
+                let on = if branch.is_empty() {
+                    "a detached HEAD".to_string()
+                } else {
+                    cformat!("<bold>{branch}</>")
+                };
+                cformat!(
+                    "Primary worktree @ <bold>{path}</> is on {on}, not the default branch <bold>{detail}</>"
+                )
+            }
+            FindingKind::NestedWorktree => {
+                cformat!("Nested worktree @ <bold>{path}</>: inside the primary worktree")
+            }
             FindingKind::StaleEntry => {
                 cformat!("Stale worktree entry @ <bold>{path}</>: {detail}")
             }
@@ -91,6 +116,9 @@ impl Finding {
             ),
             FindingKind::WtBinaries => cformat!(
                 "wt binaries report different versions; agents and hooks without <bold>WORKTRUNK_BIN</> run the first on PATH, <bold>{path}</>"
+            ),
+            FindingKind::WtBin => cformat!(
+                "wt binaries agents and hooks run are not the configured <bold>wt-bin</>, <bold>{path}</>"
             ),
             FindingKind::MergedAgentBranch => {
                 cformat!("Agent branch <bold>{branch}</> has no worktree; merged ({detail})")
@@ -113,9 +141,25 @@ impl Finding {
     fn render(&self) -> String {
         let warning = warning_message(self.line());
         match (self.kind, &self.detail) {
-            (FindingKind::BrokenWorktree | FindingKind::WtBinaries, Some(error)) => {
+            (
+                FindingKind::BrokenWorktree | FindingKind::WtBinaries | FindingKind::WtBin,
+                Some(error),
+            ) => {
                 format!("{warning}\n{}", format_with_gutter(error, None))
             }
+            (FindingKind::RootBranch, _) => format!(
+                "{warning}\n{}",
+                hint_message(cformat!(
+                    "To put it back on the default branch, run <underline>{}</>",
+                    self.fix.as_deref().unwrap_or_default()
+                ))
+            ),
+            (FindingKind::NestedWorktree, _) => format!(
+                "{warning}\n{}",
+                hint_message(cformat!(
+                    "To move it to its <bold>worktree-path</> location, run <underline>wt step relocate</>"
+                ))
+            ),
             (FindingKind::MergedAgentBranch, _) => format!(
                 "{warning}\n{}",
                 hint_message(cformat!(
@@ -135,51 +179,139 @@ impl Finding {
     }
 }
 
-pub fn step_doctor(fix: bool, format: crate::cli::SwitchFormat) -> anyhow::Result<()> {
-    let repo = Repository::current()?;
-    let findings = diagnose(&repo)?;
+/// A finding tagged with its repository, for `--repo` with `--format=json`.
+#[derive(serde::Serialize)]
+struct RepoFinding {
+    repo: PathBuf,
+    #[serde(flatten)]
+    finding: Finding,
+}
+
+pub fn step_doctor(
+    repos: Vec<PathBuf>,
+    fix: bool,
+    format: crate::cli::SwitchFormat,
+) -> anyhow::Result<()> {
+    let json = format == crate::cli::SwitchFormat::Json;
+    if repos.is_empty() {
+        let repo = Repository::current()?;
+        let findings = diagnose(&repo)?;
+        if json {
+            print_json(&findings)?;
+        } else {
+            print_report(&findings, fix);
+        }
+        return prune_stale(&repo, &findings, fix);
+    }
+
+    let mut seen = HashSet::new();
+    let mut tagged = Vec::new();
+    let mut failed = false;
+    for path in repos.iter().map(resolve_input_path) {
+        // A shell glob like `~/code/org/*` also matches plain files.
+        if !path.is_dir() {
+            continue;
+        }
+        let display = format_path_for_display(&path);
+        let repo = match Repository::at(path.clone()) {
+            Ok(repo) if repo.repo_path().is_ok_and(|root| paths_match(root, &path)) => repo,
+            _ => {
+                eprintln!(
+                    "{}",
+                    info_message(cformat!(
+                        "Skipping <bold>{display}</> (not a repository's primary checkout)"
+                    ))
+                );
+                continue;
+            }
+        };
+        if !seen.insert(repo.git_common_dir().to_path_buf()) {
+            continue;
+        }
+        if !json {
+            eprintln!(
+                "{}",
+                progress_message(cformat!("Checking <bold>{display}</>..."))
+            );
+        }
+        let result = diagnose(&repo).and_then(|findings| {
+            if !json {
+                print_report(&findings, fix);
+            }
+            prune_stale(&repo, &findings, fix)?;
+            Ok(findings)
+        });
+        match result {
+            Ok(findings) => tagged.extend(findings.into_iter().map(|finding| RepoFinding {
+                repo: path.clone(),
+                finding,
+            })),
+            Err(err) => {
+                if err.interrupt_signal().is_some() {
+                    return Err(err);
+                }
+                let detail = err
+                    .render_diagnostic()
+                    .unwrap_or_else(|| err.display_message());
+                eprintln!("{}", error_message(format!("Failed in {display}")));
+                eprintln!("{}", format_with_gutter(&detail, None));
+                failed = true;
+            }
+        }
+    }
+    if json {
+        print_json(&tagged)?;
+    }
+    if failed {
+        return Err(WorktrunkError::AlreadyDisplayed { exit_code: 1 }.into());
+    }
+    Ok(())
+}
+
+/// Print `findings` as text, with the hints that apply to them.
+fn print_report(findings: &[Finding], fix: bool) {
+    if findings.is_empty() {
+        eprintln!("{}", info_message("No worktree problems found"));
+        return;
+    }
+    for finding in findings {
+        println!("{}", finding.render());
+    }
+    if !fix && findings.iter().any(|f| f.kind == FindingKind::StaleEntry) {
+        println!(
+            "{}",
+            hint_message(cformat!(
+                "To clear stale entries, run <underline>wt step doctor --fix</>"
+            ))
+        );
+    }
+    if findings.iter().any(|f| {
+        matches!(
+            f.kind,
+            FindingKind::AgentWorktree | FindingKind::AgentDirectory
+        )
+    }) {
+        println!(
+            "{}",
+            hint_message(cformat!(
+                "To move registered agent worktrees to their <bold>worktree-path</> location, run <underline>wt step relocate</>"
+            ))
+        );
+        println!(
+            "{}",
+            hint_message(cformat!(
+                "To have Claude Code create worktrees in this layout, run <underline>wt config plugins claude install</>"
+            ))
+        );
+    }
+}
+
+/// With `--fix`, clear `repo`'s stale entries with `git worktree prune`.
+fn prune_stale(repo: &Repository, findings: &[Finding], fix: bool) -> anyhow::Result<()> {
     let stale = findings
         .iter()
         .filter(|f| f.kind == FindingKind::StaleEntry)
         .count();
-
-    if format == crate::cli::SwitchFormat::Json {
-        print_json(&findings)?;
-    } else if findings.is_empty() {
-        eprintln!("{}", info_message("No worktree problems found"));
-    } else {
-        for finding in &findings {
-            println!("{}", finding.render());
-        }
-        if stale > 0 && !fix {
-            println!(
-                "{}",
-                hint_message(cformat!(
-                    "To clear stale entries, run <underline>wt step doctor --fix</>"
-                ))
-            );
-        }
-        if findings.iter().any(|f| {
-            matches!(
-                f.kind,
-                FindingKind::AgentWorktree | FindingKind::AgentDirectory
-            )
-        }) {
-            println!(
-                "{}",
-                hint_message(cformat!(
-                    "To move registered agent worktrees to their <bold>worktree-path</> location, run <underline>wt step relocate</>"
-                ))
-            );
-            println!(
-                "{}",
-                hint_message(cformat!(
-                    "To have Claude Code create worktrees in this layout, run <underline>wt config plugins claude install</>"
-                ))
-            );
-        }
-    }
-
     if fix && stale > 0 {
         repo.run_command(&["worktree", "prune"])?;
         eprintln!(
@@ -211,6 +343,51 @@ pub(crate) fn diagnose(repo: &Repository) -> anyhow::Result<Vec<Finding>> {
     };
 
     let mut findings = Vec::new();
+    let default_branch = repo.default_branch();
+
+    // The primary checkout belongs on the default branch. A bare repository's
+    // primary is the default branch's worktree, so it never fires there.
+    if let Some(primary) = repo.primary_worktree()?
+        && let Some(target) = &default_branch
+        && let Some(root) = worktrees
+            .iter()
+            .find(|wt| !wt.is_prunable() && paths_match(&wt.path, &primary))
+        && root.branch.as_deref() != Some(target.as_str())
+    {
+        let dir = shell_escape::unix::escape(root.path.to_string_lossy());
+        findings.push(Finding {
+            kind: FindingKind::RootBranch,
+            path: Some(root.path.clone()),
+            branch: root.branch.clone(),
+            detail: Some(target.clone()),
+            fix: Some(format!("git -C {dir} switch {target}")),
+        });
+    }
+
+    // Worktrees inside the primary checkout show up in its file watchers,
+    // searches, and `git status` of tools that don't stop at a nested `.git`.
+    // Agent worktrees are reported below; a template that nests worktrees
+    // makes them intended.
+    let probe = compute_worktree_path(repo, PROBE_BRANCH, config).ok();
+    if let Some(primary) = repo
+        .primary_worktree()?
+        .map(|p| canonicalize_with_parents(&p))
+        && !probe
+            .as_deref()
+            .is_some_and(|p| canonicalize_with_parents(p).starts_with(&primary))
+    {
+        for wt in worktrees.iter().filter(|wt| !wt.is_prunable()) {
+            let path = canonicalize_with_parents(&wt.path);
+            if path != primary && path.starts_with(&primary) && !is_agent_path(&wt.path) {
+                findings.push(finding(
+                    FindingKind::NestedWorktree,
+                    &wt.path,
+                    None,
+                    Some("wt step relocate"),
+                ));
+            }
+        }
+    }
 
     for wt in worktrees {
         if let Some(reason) = &wt.prunable {
@@ -243,11 +420,16 @@ pub(crate) fn diagnose(repo: &Repository) -> anyhow::Result<Vec<Finding>> {
             }
         }
         if is_agent_path(&wt.path) {
+            // Agent branch names are throwaway, so adopting the tree means
+            // naming its branch first.
+            let dir = shell_escape::unix::escape(wt.path.to_string_lossy());
+            let fix =
+                format!("git -C {dir} branch -m <new-branch> && wt step relocate <new-branch>");
             findings.push(finding(
                 FindingKind::AgentWorktree,
                 &wt.path,
                 None,
-                Some("wt step relocate"),
+                Some(&fix),
             ));
         }
     }
@@ -257,7 +439,7 @@ pub(crate) fn diagnose(repo: &Repository) -> anyhow::Result<Vec<Finding>> {
     // `{{ branch }}` alone) can't tell worktrees from unrelated directories, so
     // it is skipped. A sibling with its own `.git` directory is a separate
     // repository (`repo.github.io`), not a stray.
-    if let Ok(probe) = compute_worktree_path(repo, PROBE_BRANCH, config)
+    if let Some(probe) = &probe
         && let (Some(parent), Some(name)) =
             (probe.parent(), probe.file_name().and_then(|n| n.to_str()))
         && let Some((prefix, suffix)) = name.split_once(PROBE_BRANCH)
@@ -289,8 +471,7 @@ pub(crate) fn diagnose(repo: &Repository) -> anyhow::Result<Vec<Finding>> {
 
     // Branches Claude Code's `Agent` isolation leaves behind (`agent-<hex id>`)
     // once their worktree is gone. Any registration, stale or not, counts as
-    // checked out. The default branch resolves only when one is found, since
-    // an uncached lookup can query the remote.
+    // checked out.
     let snapshot = repo.capture_refs()?;
     let leftovers: Vec<&str> = snapshot
         .local_branches()
@@ -305,10 +486,10 @@ pub(crate) fn diagnose(repo: &Repository) -> anyhow::Result<Vec<Finding>> {
         })
         .collect();
     if !leftovers.is_empty()
-        && let Some(target) = repo.default_branch()
+        && let Some(target) = &default_branch
     {
         for name in leftovers {
-            let (_, reason) = repo.integration_reason(&snapshot, name, &target)?;
+            let (_, reason) = repo.integration_reason(&snapshot, name, target)?;
             findings.push(match reason {
                 Some(reason) => Finding {
                     kind: FindingKind::MergedAgentBranch,
@@ -328,7 +509,10 @@ pub(crate) fn diagnose(repo: &Repository) -> anyhow::Result<Vec<Finding>> {
         }
     }
 
-    findings.extend(wt_binaries_finding());
+    findings.extend(match &config.wt_bin {
+        Some(bin) => wt_bin_finding(Path::new(bin)),
+        None => wt_binaries_finding(),
+    });
     Ok(findings)
 }
 
@@ -381,6 +565,33 @@ fn wt_binaries_finding() -> Option<Finding> {
         path: Some(versions[0].0.clone()),
         branch: None,
         detail: Some(detail),
+        fix: None,
+    })
+}
+
+/// With `wt-bin` set, the binaries agents and hooks would run instead: the
+/// first `wt` on PATH, and `WORKTRUNK_BIN` when set.
+fn wt_bin_finding(expected: &Path) -> Option<Finding> {
+    let canonical =
+        |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let expected = canonical(&expand_tilde(expected));
+    let name = if cfg!(windows) { "git-wt" } else { "wt" };
+    let mut mismatches = Vec::new();
+    match which::which(name) {
+        Ok(path) if canonical(&path) == expected => {}
+        Ok(path) => mismatches.push(format!("PATH → {}", format_path_for_display(&path))),
+        Err(_) => mismatches.push(format!("PATH → no {name} found")),
+    }
+    if let Some(bin) = std::env::var_os("WORKTRUNK_BIN").map(PathBuf::from)
+        && canonical(&bin) != expected
+    {
+        mismatches.push(format!("WORKTRUNK_BIN → {}", format_path_for_display(&bin)));
+    }
+    (!mismatches.is_empty()).then(|| Finding {
+        kind: FindingKind::WtBin,
+        path: Some(expected),
+        branch: None,
+        detail: Some(mismatches.join("\n")),
         fix: None,
     })
 }
