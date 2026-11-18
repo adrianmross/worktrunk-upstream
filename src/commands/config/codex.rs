@@ -1,6 +1,6 @@
 //! Codex plugin and marketplace management.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use color_print::cformat;
 use worktrunk::styling::{eprintln, hint_message, progress_message, success_message};
 
@@ -136,4 +136,30 @@ pub(super) fn is_marketplace_configured() -> Option<bool> {
         "name",
         MARKETPLACE_NAME,
     )
+}
+
+/// A Codex hook payload: the event, and the session's working directory.
+#[derive(serde::Deserialize)]
+struct CodexHook {
+    hook_event_name: String,
+    #[serde(default)]
+    cwd: std::path::PathBuf,
+}
+
+/// Handle `wt config plugins codex hook`, the `worktrunk-markers` plugin's
+/// `SessionStart` hook. It hands the session `wt step doctor`'s findings for
+/// the payload's `cwd`, falling back to the hook's own directory, in the
+/// shape Claude Code's `SessionStart` reads. Other events print nothing.
+pub fn handle_codex_hook() -> Result<()> {
+    let hook: CodexHook = serde_json::from_reader(std::io::stdin().lock())
+        .context("Failed to parse Codex hook payload")?;
+    if hook.hook_event_name == "SessionStart" {
+        let dir = if hook.cwd.as_os_str().is_empty() {
+            std::env::current_dir().context("Failed to read the current directory")?
+        } else {
+            hook.cwd
+        };
+        super::plugins::print_doctor_context(&dir);
+    }
+    Ok(())
 }

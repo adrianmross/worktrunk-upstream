@@ -11,6 +11,17 @@
   "keywords": ["git", "worktree", "codex", "agent"],
   "hooks": {
     "hooks": {
+      "SessionStart": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "bash \"$PLUGIN_ROOT/hooks/wt.sh\" config plugins codex hook || true",
+              "commandWindows": "cmd /d /c call \"${PLUGIN_ROOT}\\hooks\\wt.cmd\" config plugins codex hook"
+            }
+          ]
+        }
+      ],
       "UserPromptSubmit": [
         {
           "hooks": [

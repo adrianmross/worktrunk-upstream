@@ -47,7 +47,7 @@ codex plugin add worktrunk@worktrunk
 codex plugin add worktrunk-markers@worktrunk
 ```
 
-`worktrunk` carries the skills; `worktrunk-markers` carries only the activity-marker hooks, so skill updates don't make Codex ask to approve the hooks again. An install that predates the split has only `worktrunk`, whose markers stop once it updates; add the markers with `codex plugin add worktrunk-markers@worktrunk`.
+`worktrunk` carries the skills; `worktrunk-markers` carries only the hooks (activity markers and the session-start worktree check), so skill updates don't make Codex ask to approve the hooks again. An install that predates the split has only `worktrunk`, whose markers stop once it updates; add the markers with `codex plugin add worktrunk-markers@worktrunk`.
 
 `wt config plugins codex uninstall` removes both plugins and their marketplace entry.
 
@@ -144,9 +144,9 @@ Claude Code agents can run in isolated worktrees (`isolation: "worktree"`). By d
 
 Under OpenCode 2, the plugin registers a `worktrunk` worktree strategy, so worktrees OpenCode creates and removes go through the same commands. Each gets a branch named after the worktree name OpenCode chooses, at the path from `worktree-path`; OpenCode's `worktree.directory` setting is ignored. New branches start from the default branch (or the starting ref OpenCode passes), not the current checkout's HEAD. A dirty worktree fails removal with worktrunk's message rather than an offer to force.
 
-## Worktree problems at session start (Claude Code only)
+## Worktree problems at session start (Claude Code and Codex)
 
-The plugin's `SessionStart` hook runs the checks of `wt step doctor` on the session's project directory. When they find a primary worktree off the default branch, worktrees nested inside it, stale entries, broken worktrees, stray directories, agent worktrees outside the `worktree-path` layout, `wt` binaries that report different versions, or `agent-<id>` branches left without a worktree, the session starts with one line per problem and its fix command in the agent's context. A clean repository, or a directory outside any repository, adds nothing.
+The Claude Code plugin's and the Codex `worktrunk-markers` plugin's `SessionStart` hooks run the checks of `wt step doctor` on the session's project directory. When they find a primary worktree off the default branch, worktrees nested inside it, stale entries, broken worktrees, stray directories, agent worktrees outside the `worktree-path` layout, `wt` binaries that report different versions, or `agent-<id>` branches left without a worktree, the session starts with one line per problem and its fix command in the agent's context. A clean repository, or a directory outside any repository, adds nothing.
 
 ## `/wt-switch-create` skill (Claude Code only)
 

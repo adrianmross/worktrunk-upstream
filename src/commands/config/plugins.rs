@@ -183,21 +183,7 @@ pub fn handle_claude_hook() -> anyhow::Result<()> {
             set_marker(&project_dir, Some("💬"))
         }
         ClaudeHook::SessionStart {} => {
-            if let Ok(findings) = Repository::at(&project_dir)
-                .and_then(|repo| crate::commands::step::doctor::diagnose(&repo))
-                && !findings.is_empty()
-            {
-                let lines: Vec<String> = findings.iter().map(|f| f.summary()).collect();
-                let _ = print_json(&serde_json::json!({
-                    "hookSpecificOutput": {
-                        "hookEventName": "SessionStart",
-                        "additionalContext": format!(
-                            "wt step doctor found worktree problems in this repository:\n{}",
-                            lines.join("\n")
-                        ),
-                    }
-                }));
-            }
+            print_doctor_context(&project_dir);
             Ok(())
         }
         ClaudeHook::SessionEnd {} => set_marker(&project_dir, None),
@@ -244,6 +230,28 @@ pub fn handle_claude_hook() -> anyhow::Result<()> {
             ]))?;
             Ok(())
         }
+    }
+}
+
+/// Prints `wt step doctor`'s findings for the repository at `dir` as
+/// `SessionStart` context, one line per finding with its fix command. Claude
+/// Code and Codex read the same shape. A clean repository, a directory in no
+/// repository, or an error prints nothing.
+pub(super) fn print_doctor_context(dir: &Path) {
+    if let Ok(findings) =
+        Repository::at(dir).and_then(|repo| crate::commands::step::doctor::diagnose(&repo))
+        && !findings.is_empty()
+    {
+        let lines: Vec<String> = findings.iter().map(|f| f.summary()).collect();
+        let _ = print_json(&serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": format!(
+                    "wt step doctor found worktree problems in this repository:\n{}",
+                    lines.join("\n")
+                ),
+            }
+        }));
     }
 }
 
