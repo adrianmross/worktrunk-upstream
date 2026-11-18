@@ -196,7 +196,9 @@ fn test_claude_hook_worktree_create(repo: TestRepo) {
 
 /// `WorktreeRemove` resolves against the path Claude Code hands it, even when
 /// the session's project dir is no repository at all (#3754), and keeps an
-/// unmerged branch rather than force-deleting it (#2939).
+/// unmerged branch rather than force-deleting it (#2939). It refuses a worktree
+/// with uncommitted work: `ExitWorktree` with `discard_changes: true` leaves
+/// this hook as the last check before the session leaves it.
 #[rstest]
 fn test_claude_hook_worktree_remove(mut repo: TestRepo) {
     let feature = repo.add_worktree("feature");
@@ -207,6 +209,12 @@ fn test_claude_hook_worktree_remove(mut repo: TestRepo) {
         "hook_event_name": "WorktreeRemove",
         "worktree_path": feature,
     });
+    std::fs::write(feature.join("draft.txt"), "uncommitted").unwrap();
+    let dirty = run_hook(&repo, &outside, &outside, &payload.to_string());
+    assert!(!dirty.status.success(), "{dirty:?}");
+    assert!(feature.join("draft.txt").exists());
+    std::fs::remove_file(feature.join("draft.txt")).unwrap();
+
     let output = run_hook(&repo, &outside, &outside, &payload.to_string());
     assert!(output.status.success(), "{output:?}");
     assert!(!feature.exists());
