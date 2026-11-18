@@ -8,15 +8,23 @@
 //!
 //! ## Policy
 //!
-//! - **macOS**: `nice -n 19`, which lowers CPU scheduling only. Darwin's
-//!   I/O throttling (`taskpolicy -b`, `PRIO_DARWIN_BG`) is not used: a
-//!   throttled process is held back while normal-priority I/O keeps the
-//!   device busy, so under sustained disk activity (a test suite, Spotlight indexing) it
-//!   makes no progress at all — `taskpolicy -b /usr/bin/true` did not exit
-//!   within 30s on an otherwise 64%-idle machine. Each stalled trash drain
-//!   held its `sh`, `wt`, and `git` processes open, and a test suite
-//!   accumulated hundreds of them. Background work that finishes slowly is
-//!   acceptable; background work that never finishes is not.
+//! - **macOS**: `taskpolicy -c utility`, a utility QoS clamp that lowers
+//!   both CPU scheduling and I/O tier. Not `taskpolicy -b`
+//!   (`PRIO_DARWIN_BG`) or `-c background`: those put I/O in the
+//!   background throttle tier, which makes no progress while
+//!   normal-priority I/O keeps the device busy. Under sustained disk
+//!   activity (a test suite, Spotlight indexing) a 20k-file `rm -rf` under
+//!   `-b` or `-c background` hit a 120s timeout, and each stalled trash
+//!   drain held its `sh`, `wt`, and `git` processes open until a test suite
+//!   accumulated hundreds of them. The same `rm -rf` under `-c utility` ran
+//!   slower than at normal priority but always finished (3-10s under load).
+//!   Background work that finishes slowly is acceptable; background work
+//!   that never finishes is not.
+//!
+//!   [`lower_current_process`] still uses `renice -n 19` (CPU only):
+//!   `taskpolicy -p` documents only `-b`/`-B` and the tier flags, and
+//!   rejects `-d`, so there is no supported way to apply the utility clamp
+//!   to a running pid.
 //! - **Linux**: `nice -n 19` for CPU plus best-effort `ionice -c 3` (idle
 //!   class) for I/O. `ionice` is probed once via `which` — it ships in
 //!   `util-linux` on every mainstream distro and is enabled in Alpine's
@@ -35,10 +43,10 @@
 //!   worktrunk process (and any threads/children it later spawns) should run
 //!   at lower priority. The policy is inherited across `fork`/`exec`.
 //! - [`command`] — build a [`Command`] that starts its child under the
-//!   policy, by wrapping it in `nice -n 19 -- <cmd>` or
-//!   `ionice … nice … <cmd>`. Used for detached background spawns where we
-//!   want the wrapper tool itself to apply the policy and then exec the real
-//!   work.
+//!   policy, by wrapping it in `taskpolicy -c utility <cmd>` (macOS),
+//!   `nice -n 19 -- <cmd>`, or `ionice … nice … <cmd>`. Used for detached
+//!   background spawns where we want the wrapper tool itself to apply the
+//!   policy and then exec the real work.
 //!
 //! ## Background-hook context signalling
 //!
@@ -113,16 +121,19 @@ pub fn lower_current_process() {
 /// Build a [`Command`] that runs `program` at lowered priority when `lower`
 /// is set, or at normal priority when not.
 ///
-/// The wrapper tool (`nice`, plus `ionice` on Linux) applies the policy and
-/// then execs `program`, so policy is inherited by the child and its
-/// descendants. See the [module docs](self) for the full policy.
+/// The wrapper tool (`taskpolicy` on macOS; `nice`, plus `ionice`, on Linux)
+/// applies the policy and then execs `program`, so policy is inherited by
+/// the child and its descendants. See the [module docs](self) for the full
+/// policy.
 pub fn command(program: impl AsRef<OsStr>, lower: bool) -> Command {
     if !lower {
         return Command::new(program);
     }
     #[cfg(target_os = "macos")]
     {
-        low_priority_command(program.as_ref(), false)
+        let mut cmd = Command::new("taskpolicy");
+        cmd.args(["-c", "utility"]).arg(program);
+        cmd
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
@@ -137,7 +148,7 @@ pub fn command(program: impl AsRef<OsStr>, lower: bool) -> Command {
 /// `ionice -c 3 -- nice -n 19 -- <program>` if `has_ionice`, else
 /// `nice -n 19 -- <program>`. Extracted so both branches are testable
 /// without depending on whether the runner has `ionice` installed.
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn low_priority_command(program: &OsStr, has_ionice: bool) -> Command {
     if has_ionice {
         let mut cmd = Command::new("ionice");
@@ -190,13 +201,13 @@ mod tests {
     /// indefinitely under sustained disk load (see the module docs).
     #[cfg(target_os = "macos")]
     #[test]
-    fn command_lower_wraps_in_nice() {
+    fn command_lower_wraps_in_taskpolicy_utility() {
         let cmd = command("echo", true);
-        assert_eq!(cmd.get_program(), "nice");
-        assert_eq!(args_of(&cmd), ["-n", "19", "--", "echo"]);
+        assert_eq!(cmd.get_program(), "taskpolicy");
+        assert_eq!(args_of(&cmd), ["-c", "utility", "echo"]);
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn wrap_with_ionice() {
         let cmd = low_priority_command(OsStr::new("echo"), true);
@@ -207,7 +218,7 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn wrap_without_ionice() {
         let cmd = low_priority_command(OsStr::new("echo"), false);
