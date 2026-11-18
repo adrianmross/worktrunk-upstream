@@ -156,3 +156,32 @@ fn test_doctor_root_branch(repo: TestRepo) {
     repo.run_git(&["switch", "--detach"]);
     assert_cmd_snapshot!("doctor_root_branch_detached", doctor(&repo, &["doctor"]));
 }
+
+/// A worktree inside the primary worktree is reported; one under
+/// `.claude/worktrees/` is left to the agent-worktree check.
+#[rstest]
+fn test_doctor_nested_worktree(mut repo: TestRepo) {
+    let nested = repo.root_path().join("nested");
+    repo.add_worktree_at_path("inner", &nested);
+    let agents = repo.root_path().join(".claude").join("worktrees");
+    repo.add_worktree_at_path("agent", &agents.join("agent"));
+
+    assert_cmd_snapshot!(doctor(&repo, &["doctor"]));
+    assert_cmd_snapshot!(
+        "doctor_nested_worktree_json",
+        doctor(&repo, &["doctor", "--format=json"])
+    );
+}
+
+/// A `worktree-path` template inside the repository makes nesting intended.
+#[rstest]
+fn test_doctor_nested_worktree_by_template(mut repo: TestRepo) {
+    repo.write_test_config(
+        r#"worktree-path = "{{ repo_path }}/.worktrees/{{ branch | sanitize }}"
+"#,
+    );
+    let nested = repo.root_path().join("nested");
+    repo.add_worktree_at_path("inner", &nested);
+
+    assert_cmd_snapshot!(doctor(&repo, &["doctor"]));
+}
