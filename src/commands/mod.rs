@@ -64,7 +64,7 @@ pub(crate) use run_pipeline::run_pipeline;
 pub(crate) use step::{
     PreApprovedGuidance, PromoteResult, RebaseResult, SquashResult, handle_promote, handle_rebase,
     handle_squash, step_commit, step_copy_ignored, step_diff, step_dry_run_squash, step_prune,
-    step_relocate, step_show_squash_prompt, step_tether,
+    step_relocate, step_restore, step_show_squash_prompt, step_tether,
 };
 pub(crate) use worktree::{
     handle_switch_command, is_worktree_at_expected_path, worktree_display_name,
