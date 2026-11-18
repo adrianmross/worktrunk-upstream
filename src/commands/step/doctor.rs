@@ -1,8 +1,10 @@
 //! `wt step doctor` — report worktree health problems for the current repository.
 //!
-//! Seven read-only checks, printed to stdout as one report:
+//! Eight read-only checks, printed to stdout as one report:
 //!
 //! - root branch: the primary worktree is not on the default branch
+//! - nested worktrees: registrations inside the primary worktree, unless the
+//!   `worktree-path` template puts them there
 //! - stale entries: registrations git lists as prunable
 //! - broken worktrees: live registrations where `git rev-parse` can't read `HEAD`
 //! - stray directories: `<prefix><name><suffix>` directories beside the
@@ -59,6 +61,7 @@ pub(crate) struct Finding {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum FindingKind {
     RootBranch,
+    NestedWorktree,
     StaleEntry,
     BrokenWorktree,
     StrayDirectory,
@@ -89,6 +92,9 @@ impl Finding {
                 cformat!(
                     "Primary worktree @ <bold>{path}</> is on {on}, not the default branch <bold>{detail}</>"
                 )
+            }
+            FindingKind::NestedWorktree => {
+                cformat!("Nested worktree @ <bold>{path}</>: inside the primary worktree")
             }
             FindingKind::StaleEntry => {
                 cformat!("Stale worktree entry @ <bold>{path}</>: {detail}")
@@ -135,6 +141,12 @@ impl Finding {
                 hint_message(cformat!(
                     "To put it back on the default branch, run <underline>{}</>",
                     self.fix.as_deref().unwrap_or_default()
+                ))
+            ),
+            (FindingKind::NestedWorktree, _) => format!(
+                "{warning}\n{}",
+                hint_message(cformat!(
+                    "To move it to its <bold>worktree-path</> location, run <underline>wt step relocate</>"
                 ))
             ),
             (FindingKind::MergedAgentBranch, _) => format!(
@@ -253,6 +265,31 @@ pub(crate) fn diagnose(repo: &Repository) -> anyhow::Result<Vec<Finding>> {
         });
     }
 
+    // Worktrees inside the primary checkout show up in its file watchers,
+    // searches, and `git status` of tools that don't stop at a nested `.git`.
+    // Agent worktrees are reported below; a template that nests worktrees
+    // makes them intended.
+    let probe = compute_worktree_path(repo, PROBE_BRANCH, config).ok();
+    if let Some(primary) = repo
+        .primary_worktree()?
+        .map(|p| canonicalize_with_parents(&p))
+        && !probe
+            .as_deref()
+            .is_some_and(|p| canonicalize_with_parents(p).starts_with(&primary))
+    {
+        for wt in worktrees.iter().filter(|wt| !wt.is_prunable()) {
+            let path = canonicalize_with_parents(&wt.path);
+            if path != primary && path.starts_with(&primary) && !is_agent_path(&wt.path) {
+                findings.push(finding(
+                    FindingKind::NestedWorktree,
+                    &wt.path,
+                    None,
+                    Some("wt step relocate"),
+                ));
+            }
+        }
+    }
+
     for wt in worktrees {
         if let Some(reason) = &wt.prunable {
             findings.push(finding(
@@ -303,7 +340,7 @@ pub(crate) fn diagnose(repo: &Repository) -> anyhow::Result<Vec<Finding>> {
     // `{{ branch }}` alone) can't tell worktrees from unrelated directories, so
     // it is skipped. A sibling with its own `.git` directory is a separate
     // repository (`repo.github.io`), not a stray.
-    if let Ok(probe) = compute_worktree_path(repo, PROBE_BRANCH, config)
+    if let Some(probe) = &probe
         && let (Some(parent), Some(name)) =
             (probe.parent(), probe.file_name().and_then(|n| n.to_str()))
         && let Some((prefix, suffix)) = name.split_once(PROBE_BRANCH)

@@ -701,6 +701,7 @@ $ wt step doctor --format=json
 ## Checks
 
 - **Root branch** — the primary worktree is not on the default branch; switch it back with `git -C <path> switch <default>`
+- **Nested worktree** — a worktree inside the primary worktree, unless the `worktree-path` template puts worktrees there; `.claude/worktrees/` trees are reported as agent worktrees
 - **Stale entry** — git lists the worktree as prunable, usually because its directory was deleted or moved; shows git's reason
 - **Broken worktree** — git can't read the worktree's `HEAD` commit, as with a broken `objects/info/alternates` or `.git` file
 - **Stray directory** — a directory named like this repository's worktrees, beside them, that no worktree is registered at
@@ -716,7 +717,7 @@ The report changes nothing. `--fix` also runs `git worktree prune`, which clears
 
 ## JSON output
 
-`--format=json` prints the findings as an array, empty when there are none. Each finding has a `kind` (`root_branch`, `stale_entry`, `broken_worktree`, `stray_directory`, `agent_worktree`, `agent_directory`, `wt_binaries`, `merged_agent_branch`, `unmerged_agent_branch`) and a `path` or `branch`, plus a `detail` (git's reason or error, each binary's version, how a branch is merged, or the default branch the primary worktree is off) and a `fix` command when there is one.
+`--format=json` prints the findings as an array, empty when there are none. Each finding has a `kind` (`root_branch`, `nested_worktree`, `stale_entry`, `broken_worktree`, `stray_directory`, `agent_worktree`, `agent_directory`, `wt_binaries`, `merged_agent_branch`, `unmerged_agent_branch`) and a `path` or `branch`, plus a `detail` (git's reason or error, each binary's version, how a branch is merged, or the default branch the primary worktree is off) and a `fix` command when there is one.
 "#)]
     Doctor {
         /// Clear stale entries with `git worktree prune`
