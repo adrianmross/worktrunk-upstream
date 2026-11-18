@@ -1,7 +1,8 @@
 //! `wt step doctor` — report worktree health problems for the current repository.
 //!
-//! Six read-only checks, printed to stdout as one report:
+//! Seven read-only checks, printed to stdout as one report:
 //!
+//! - root branch: the primary worktree is not on the default branch
 //! - stale entries: registrations git lists as prunable
 //! - broken worktrees: live registrations where `git rev-parse` can't read `HEAD`
 //! - stray directories: `<prefix><name><suffix>` directories beside the
@@ -21,7 +22,7 @@ use std::time::Duration;
 
 use color_print::cformat;
 use worktrunk::git::Repository;
-use worktrunk::path::{canonicalize_with_parents, format_path_for_display};
+use worktrunk::path::{canonicalize_with_parents, format_path_for_display, paths_match};
 use worktrunk::shell_exec::Cmd;
 use worktrunk::styling::{
     eprintln, format_with_gutter, hint_message, info_message, println, success_message,
@@ -41,10 +42,12 @@ pub(crate) struct Finding {
     pub kind: FindingKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
-    /// The branch, for agent branches left without a worktree.
+    /// The branch, for agent branches left without a worktree and the
+    /// primary worktree's branch.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
-    /// Git's reason or error, for stale entries and broken worktrees.
+    /// Git's reason or error, for stale entries and broken worktrees; the
+    /// default branch, for a primary worktree off it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     /// The command that addresses this finding, when one exists.
@@ -55,6 +58,7 @@ pub(crate) struct Finding {
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum FindingKind {
+    RootBranch,
     StaleEntry,
     BrokenWorktree,
     StrayDirectory,
@@ -76,6 +80,16 @@ impl Finding {
         let branch = self.branch.as_deref().unwrap_or_default();
         let detail = self.detail.as_deref().unwrap_or_default();
         match self.kind {
+            FindingKind::RootBranch => {
+                let on = if branch.is_empty() {
+                    "a detached HEAD".to_string()
+                } else {
+                    cformat!("<bold>{branch}</>")
+                };
+                cformat!(
+                    "Primary worktree @ <bold>{path}</> is on {on}, not the default branch <bold>{detail}</>"
+                )
+            }
             FindingKind::StaleEntry => {
                 cformat!("Stale worktree entry @ <bold>{path}</>: {detail}")
             }
@@ -116,6 +130,13 @@ impl Finding {
             (FindingKind::BrokenWorktree | FindingKind::WtBinaries, Some(error)) => {
                 format!("{warning}\n{}", format_with_gutter(error, None))
             }
+            (FindingKind::RootBranch, _) => format!(
+                "{warning}\n{}",
+                hint_message(cformat!(
+                    "To put it back on the default branch, run <underline>{}</>",
+                    self.fix.as_deref().unwrap_or_default()
+                ))
+            ),
             (FindingKind::MergedAgentBranch, _) => format!(
                 "{warning}\n{}",
                 hint_message(cformat!(
@@ -211,6 +232,26 @@ pub(crate) fn diagnose(repo: &Repository) -> anyhow::Result<Vec<Finding>> {
     };
 
     let mut findings = Vec::new();
+    let default_branch = repo.default_branch();
+
+    // The primary checkout belongs on the default branch. A bare repository's
+    // primary is the default branch's worktree, so it never fires there.
+    if let Some(primary) = repo.primary_worktree()?
+        && let Some(target) = &default_branch
+        && let Some(root) = worktrees
+            .iter()
+            .find(|wt| !wt.is_prunable() && paths_match(&wt.path, &primary))
+        && root.branch.as_deref() != Some(target.as_str())
+    {
+        let dir = shell_escape::unix::escape(root.path.to_string_lossy());
+        findings.push(Finding {
+            kind: FindingKind::RootBranch,
+            path: Some(root.path.clone()),
+            branch: root.branch.clone(),
+            detail: Some(target.clone()),
+            fix: Some(format!("git -C {dir} switch {target}")),
+        });
+    }
 
     for wt in worktrees {
         if let Some(reason) = &wt.prunable {
@@ -243,11 +284,16 @@ pub(crate) fn diagnose(repo: &Repository) -> anyhow::Result<Vec<Finding>> {
             }
         }
         if is_agent_path(&wt.path) {
+            // Agent branch names are throwaway, so adopting the tree means
+            // naming its branch first.
+            let dir = shell_escape::unix::escape(wt.path.to_string_lossy());
+            let fix =
+                format!("git -C {dir} branch -m <new-branch> && wt step relocate <new-branch>");
             findings.push(finding(
                 FindingKind::AgentWorktree,
                 &wt.path,
                 None,
-                Some("wt step relocate"),
+                Some(&fix),
             ));
         }
     }
@@ -289,8 +335,7 @@ pub(crate) fn diagnose(repo: &Repository) -> anyhow::Result<Vec<Finding>> {
 
     // Branches Claude Code's `Agent` isolation leaves behind (`agent-<hex id>`)
     // once their worktree is gone. Any registration, stale or not, counts as
-    // checked out. The default branch resolves only when one is found, since
-    // an uncached lookup can query the remote.
+    // checked out.
     let snapshot = repo.capture_refs()?;
     let leftovers: Vec<&str> = snapshot
         .local_branches()
@@ -305,10 +350,10 @@ pub(crate) fn diagnose(repo: &Repository) -> anyhow::Result<Vec<Finding>> {
         })
         .collect();
     if !leftovers.is_empty()
-        && let Some(target) = repo.default_branch()
+        && let Some(target) = &default_branch
     {
         for name in leftovers {
-            let (_, reason) = repo.integration_reason(&snapshot, name, &target)?;
+            let (_, reason) = repo.integration_reason(&snapshot, name, target)?;
             findings.push(match reason {
                 Some(reason) => Finding {
                     kind: FindingKind::MergedAgentBranch,
