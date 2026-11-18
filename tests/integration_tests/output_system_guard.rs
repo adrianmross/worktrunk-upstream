@@ -60,6 +60,8 @@ const STDOUT_ALLOWED_PATHS: &[&str] = &[
     "commands/config/alias.rs",
     // Template evaluation output for scripting
     "commands/eval.rs",
+    // Removal list for `wt step restore` with no branch
+    "commands/step/restore.rs",
     // LLM prompt output for wt step commit --show-prompt and squash --show-prompt
     "commands/step/commit.rs",
     "commands/step/squash.rs",

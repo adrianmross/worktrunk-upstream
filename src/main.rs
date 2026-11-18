@@ -55,7 +55,8 @@ use commands::{
     handle_state_clear, handle_state_clear_all, handle_state_get, handle_state_set,
     handle_state_show, handle_switch_command, handle_unconfigure_shell, handle_vars_clear,
     handle_vars_get, handle_vars_list, handle_vars_set, list_approvals, run_hook, step_commit,
-    step_copy_ignored, step_diff, step_eval, step_for_each, step_prune, step_relocate, step_tether,
+    step_copy_ignored, step_diff, step_eval, step_for_each, step_prune, step_relocate,
+    step_restore, step_tether,
 };
 
 use cli::{
@@ -383,6 +384,7 @@ fn handle_step_command(
             clobber,
             format,
         } => step_relocate(branches, dry_run, commit, clobber, format),
+        StepCommand::Restore { branch, format } => step_restore(branch.as_deref(), yes, format),
         StepCommand::Tether { command } => step_tether(&command, working_dir.as_deref()),
         StepCommand::External(args) => commands::step_alias(args, yes),
     }

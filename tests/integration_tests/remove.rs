@@ -6856,3 +6856,43 @@ fn test_remove_writes_removal_log(mut repo: TestRepo) {
         worktree_path
     );
 }
+
+/// `wt step restore` recreates a removed branch at its logged commit and
+/// switches to a new worktree for it, and refuses to move a branch that was
+/// recreated at a different commit.
+#[rstest]
+fn test_step_restore_after_remove(mut repo: TestRepo) {
+    let worktree_path = repo.add_worktree("feature-restore");
+    let sha = repo.git_output(&["rev-parse", "feature-restore"]);
+
+    let run = |args: &[&str]| repo.wt_command().args(args).output().unwrap();
+    let output = run(&["remove", "--yes", "--foreground", "feature-restore"]);
+    assert!(output.status.success());
+    assert!(!worktree_path.exists());
+
+    let output = run(&["step", "restore", "--format=json"]);
+    assert!(output.status.success());
+    let listed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["branch"], "feature-restore");
+    assert_eq!(listed[0]["sha"], sha.as_str());
+
+    let output = run(&["step", "restore", "--yes", "feature-restore"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(repo.git_output(&["rev-parse", "feature-restore"]), sha);
+    assert!(worktree_path.exists());
+
+    // A branch of that name at another commit is left alone.
+    let output = run(&["remove", "--yes", "--foreground", "feature-restore"]);
+    assert!(output.status.success());
+    let other = repo.git_output(&["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "other"]);
+    repo.git_output(&["branch", "feature-restore", &other]);
+    let output = run(&["step", "restore", "--yes", "feature-restore"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("already exists"));
+    assert_eq!(repo.git_output(&["rev-parse", "feature-restore"]), other);
+}
