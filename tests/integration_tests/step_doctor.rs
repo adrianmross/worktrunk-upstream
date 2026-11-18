@@ -136,3 +136,19 @@ fn test_doctor_agent_branches(mut repo: TestRepo) {
         doctor(&repo, &["doctor", "--format=json"])
     );
 }
+
+/// A primary worktree off the default branch is reported, with the command
+/// that switches it back; a detached one too.
+#[rstest]
+fn test_doctor_root_branch(repo: TestRepo) {
+    repo.run_git(&["switch", "-c", "wip"]);
+
+    assert_cmd_snapshot!(doctor(&repo, &["doctor"]));
+    assert_cmd_snapshot!(
+        "doctor_root_branch_json",
+        doctor(&repo, &["doctor", "--format=json"])
+    );
+
+    repo.run_git(&["switch", "--detach"]);
+    assert_cmd_snapshot!("doctor_root_branch_detached", doctor(&repo, &["doctor"]));
+}
