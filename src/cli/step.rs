@@ -852,6 +852,43 @@ refuses), unless `--commit` is passed.
         format: crate::cli::SwitchFormat,
     },
 
+    /// \[experimental\] Restore a removed worktree
+    ///
+    /// Lists recent removals, or recreates a branch and its worktree from `.git/wt/removed.log`.
+    #[command(
+        after_long_help = r#"Every `wt remove` records the branch and its commit in `.git/wt/removed.log`. Without an argument, `restore` lists those records, newest first. With a branch, it recreates the branch at its logged commit if it no longer exists, then switches to it as `wt switch` does.
+
+Restore refuses when the commit has been garbage-collected, or when a branch of that name already exists at a different commit.
+
+## Examples
+
+List recent removals:
+
+```console
+$ wt step restore
+```
+
+Restore a removed branch and its worktree:
+
+```console
+$ wt step restore feature
+```
+
+## JSON output
+
+`--format=json` without a branch prints the records as an array, newest first. With a branch, it prints the result as `wt switch --format=json` does.
+"#
+    )]
+    Restore {
+        /// Branch to restore (lists removals if omitted)
+        #[arg(value_parser = crate::cli::non_empty_branch)]
+        branch: Option<String>,
+
+        /// Output format
+        #[arg(long, default_value = "text", help_heading = "Automation")]
+        format: crate::cli::SwitchFormat,
+    },
+
     /// \[experimental\] Run a command; kill its whole process tree when its worktree is removed
     ///
     /// Teardown is automatic and needs no `pre-remove` hook; the group gets `SIGTERM` then `SIGKILL`.

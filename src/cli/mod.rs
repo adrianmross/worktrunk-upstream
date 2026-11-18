@@ -1382,11 +1382,7 @@ Use `--no-delete-branch` to keep the branch regardless of merge status.
 
 ## Recovering a removed branch
 
-Every removal appends a JSON line to `.git/wt/removed.log` with the time, branch, commit SHA, worktree path, and the coding agent that ran it (`claude-code`, `codex`, or `null`); a deleted branch gets its own `delete_branch` line. Recreate a branch from its SHA:
-
-```console
-$ git branch feature <sha>
-```
+Every removal appends a JSON line to `.git/wt/removed.log` with the time, branch, commit SHA, worktree path, and the coding agent that ran it (`claude-code`, `codex`, or `null`); a deleted branch gets its own `delete_branch` line. `wt step restore` lists them; `wt step restore feature` recreates the branch at its SHA and switches to a new worktree for it.
 
 ## Background removal
 

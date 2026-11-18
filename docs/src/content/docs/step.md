@@ -72,6 +72,7 @@ Commands:
   prune         Remove worktrees and branches merged into the default branch
   doctor        [experimental] Report worktree health problems
   relocate      [experimental] Move worktrees to expected paths
+  restore       [experimental] Restore a removed worktree
   tether        [experimental] Run a command; kill its whole process tree when its worktree is
                 removed
 

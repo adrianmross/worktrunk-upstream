@@ -2340,6 +2340,32 @@ pub fn handle_switch_command(args: SwitchArgs, yes: bool) -> anyhow::Result<()> 
     )
 }
 
+/// `wt switch <branch>` with every flag at its default.
+pub(crate) fn switch_to_branch(
+    branch: &str,
+    yes: bool,
+    format: SwitchFormat,
+) -> anyhow::Result<()> {
+    let mut config = UserConfig::load().context("Failed to load config")?;
+    run_switch(
+        SwitchOptions {
+            branch,
+            create: false,
+            base: None,
+            path: None,
+            execute: None,
+            execute_args: &[],
+            yes,
+            clobber: false,
+            change_dir: None,
+            verify: true,
+            format,
+        },
+        &mut config,
+        &crate::binary_name(),
+    )
+}
+
 /// Validate all templates that will be expanded after worktree creation.
 ///
 /// Catches syntax errors and undefined variable references *before* the
