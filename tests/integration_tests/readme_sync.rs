@@ -1351,6 +1351,7 @@ fn test_config_docs_include_all_sections() {
     // Keys that are bare scalars or internal flags, not TOML section headers
     let non_section_keys: HashSet<&str> = [
         "worktree-path",
+        "wt-bin",
         "skip-shell-integration-prompt",
         "skip-commit-generation-prompt",
     ]
