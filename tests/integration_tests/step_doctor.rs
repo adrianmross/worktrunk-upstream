@@ -75,6 +75,10 @@ fn test_doctor_agent_worktree(mut repo: TestRepo) {
     fs::create_dir_all(agents.join("abandoned")).unwrap();
 
     assert_cmd_snapshot!(doctor(&repo, &["doctor"]));
+    assert_cmd_snapshot!(
+        "doctor_agent_worktree_json",
+        doctor(&repo, &["doctor", "--format=json"])
+    );
 }
 
 /// `wt` binaries on PATH that report different versions are one finding,

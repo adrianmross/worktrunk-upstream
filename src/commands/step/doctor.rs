@@ -284,11 +284,16 @@ pub(crate) fn diagnose(repo: &Repository) -> anyhow::Result<Vec<Finding>> {
             }
         }
         if is_agent_path(&wt.path) {
+            // Agent branch names are throwaway, so adopting the tree means
+            // naming its branch first.
+            let dir = shell_escape::unix::escape(wt.path.to_string_lossy());
+            let fix =
+                format!("git -C {dir} branch -m <new-branch> && wt step relocate <new-branch>");
             findings.push(finding(
                 FindingKind::AgentWorktree,
                 &wt.path,
                 None,
-                Some("wt step relocate"),
+                Some(&fix),
             ));
         }
     }
