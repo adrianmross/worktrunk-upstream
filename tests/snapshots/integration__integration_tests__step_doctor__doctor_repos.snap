@@ -6,11 +6,11 @@ info:
     - step
     - doctor
     - "--repo"
-    - /private/var/folders/fs/rvvymn3n2rs6sxttssj5wr3w0000gn/T/wt/.tmpXmMfQn/alpha
-    - /private/var/folders/fs/rvvymn3n2rs6sxttssj5wr3w0000gn/T/wt/.tmpXmMfQn/plain
-    - /private/var/folders/fs/rvvymn3n2rs6sxttssj5wr3w0000gn/T/wt/.tmpXmMfQn/notes.md
+    - _REPO_/../alpha
+    - _REPO_/../plain
+    - _REPO_/../notes.md
     - _REPO_
-    - /private/var/folders/fs/rvvymn3n2rs6sxttssj5wr3w0000gn/T/wt/.tmpXmMfQn/alpha
+    - _REPO_/../alpha
   env:
     APPDATA: "[TEST_CONFIG_HOME]"
     CLAUDE_CONFIG_DIR: "[TEST_CLAUDE_CONFIG]"
@@ -67,7 +67,7 @@ exit_code: 0
 [2m↳[22m [2mTo put it back on the default branch, run [4mgit -C [PROJECT_ID] switch main[24m[22m
 
 ----- stderr -----
-[36m◎[39m [36mChecking [1m_PARENT_/alpha[22m...[39m
-[2m○[22m Skipping [1m_PARENT_/plain[22m (not a repository's primary checkout)
+[36m◎[39m [36mChecking [1m_REPO_/../alpha[22m...[39m
+[2m○[22m Skipping [1m_REPO_/../plain[22m (not a repository's primary checkout)
 [36m◎[39m [36mChecking [1m_REPO_[22m...[39m
 [2m○[22m No worktree problems found

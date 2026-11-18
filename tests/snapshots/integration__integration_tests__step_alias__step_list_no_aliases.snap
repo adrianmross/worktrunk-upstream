@@ -73,6 +73,7 @@ Usage: [1m[36mwt step[0m [36m[OPTIONS][0m [36m<COMMAND>[0m
   [1m[36mprune[0m         Remove worktrees and branches merged into the default branch
   [1m[36mdoctor[0m        [experimental] Report worktree health problems
   [1m[36mrelocate[0m      [experimental] Move worktrees to expected paths
+  [1m[36mrestore[0m       [experimental] Restore a removed worktree
   [1m[36mtether[0m        [experimental] Run a command; kill its whole process tree when its worktree is removed
 
 [1m[32mOptions:[0m
