@@ -853,8 +853,8 @@ fn test_complete_step_subcommands(repo: TestRepo) {
     assert!(subcommands.contains(&"tether"), "Missing tether");
     assert_eq!(
         subcommands.len(),
-        13,
-        "Should have exactly 13 step subcommands"
+        14,
+        "Should have exactly 14 step subcommands"
     );
 }
 
